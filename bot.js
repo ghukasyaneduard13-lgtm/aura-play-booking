@@ -26,7 +26,7 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 
 // ========== ДАННЫЕ ==========
 const users = new Map();
-const bookings = [];
+let bookings = [];
 let nextBookingId = 1;
 
 const SUPPORT_PHONE = '041780737';
