@@ -1203,7 +1203,7 @@ bot.on('callback_query', async query => {
         await bot.sendMessage(chatId, '❌ Такой даты нет. Выбери другой день.');
         return askDate(chatId);
       }
-
+      
       state.month = month;
       state.date = date;
 
