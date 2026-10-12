@@ -55,6 +55,8 @@ const photos = {
   help: process.env.PHOTO_HELP || ''
 };
 
+// ---------- КЛАВИАТУРА ----------
+
 function menu() {
   return {
     reply_markup: {
@@ -90,6 +92,8 @@ async function sendSection(chatId, key, text, options = {}) {
   });
 }
 
+// ---------- ЦЕНЫ ----------
+
 function getRate(category, hour) {
   const daytime = hour >= 10 && hour < 20;
 
@@ -112,6 +116,9 @@ function calculatePrice(category, start, duration) {
   return total;
 }
 
+// ---------- ДАТА И ВРЕМЯ ----------
+
+// Время отображается по Армении (UTC+4)
 function formatDate(timestamp) {
   const d = new Date(timestamp + 4 * 60 * 60 * 1000);
   const day = String(d.getUTCDate()).padStart(2, '0');
@@ -121,6 +128,14 @@ function formatDate(timestamp) {
   const min = String(d.getUTCMinutes()).padStart(2, '0');
 
   return `${day}.${month}.${year} ${hour}:${min}`;
+}
+
+function formatTime(timestamp) {
+  const d = new Date(timestamp + 4 * 60 * 60 * 1000);
+  const hour = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+
+  return `${hour}:${min}`;
 }
 
 function toArmeniaTimestamp(date, time) {
@@ -157,51 +172,6 @@ function bookingLeadHours(startTimestamp) {
   return hour >= 5 && hour < 10 ? 5 : 2;
 }
 
-function findAsset(id) {
-  return Object.values(assets).flat().find(a => a.id === id);
-}
-
-// Проверка занятости и поиск времени освобождения
-function getBookingConflict(assetId, start, end) {
-  const activeBookings = bookings.filter(b =>
-    b.assetId === assetId &&
-    ['pending', 'approved'].includes(b.status)
-  );
-
-  const conflicts = activeBookings.filter(b =>
-    start < b.end && end > b.start
-  );
-
-  if (conflicts.length === 0) return null;
-
-  let occupiedUntil = Math.max(...conflicts.map(b => b.end));
-
-  // Учитываем следующие брони, если они идут подряд без свободного промежутка
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-
-    for (const b of activeBookings) {
-      if (
-        b.start < occupiedUntil &&
-        b.end > start &&
-        b.end > occupiedUntil
-      ) {
-        occupiedUntil = b.end;
-        changed = true;
-      }
-    }
-  }
-
-  return { occupiedUntil };
-}
-
-function isAvailable(assetId, start, end) {
-  return getBookingConflict(assetId, start, end) === null;
-}
-
-// Автоматический выбор ближайшего подходящего года
 function getNextBookingDate(day, month) {
   const now = new Date(Date.now() + 4 * 60 * 60 * 1000);
   const currentYear = now.getUTCFullYear();
@@ -230,6 +200,177 @@ function getNextBookingDate(day, month) {
 
   return null;
 }
+
+function getDateRange(date) {
+  const [day, month, year] = date.split('.').map(Number);
+
+  const start = Date.UTC(year, month - 1, day)
+    - 4 * 60 * 60 * 1000;
+
+  return {
+    start,
+    end: start + 24 * 60 * 60 * 1000
+  };
+}
+
+// ---------- ПОИСК МЕСТ ----------
+
+function findAsset(id) {
+  return Object.values(assets).flat().find(a => a.id === id);
+}
+
+function getBookingConflict(assetId, start, end) {
+  const activeBookings = bookings.filter(b =>
+    b.assetId === assetId &&
+    ['pending', 'approved'].includes(b.status)
+  );
+
+  const conflicts = activeBookings.filter(b =>
+    start < b.end && end > b.start
+  );
+
+  if (conflicts.length === 0) return null;
+
+  let occupiedUntil = Math.max(...conflicts.map(b => b.end));
+
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    for (const b of activeBookings) {
+      if (
+        b.start < occupiedUntil &&
+        b.end > start &&
+        b.end > occupiedUntil
+      ) {
+        occupiedUntil = b.end;
+        changed = true;
+      }
+    }
+  }
+
+  return { occupiedUntil };
+}
+
+function isAvailable(assetId, start, end) {
+  return getBookingConflict(assetId, start, end) === null;
+}
+
+// ---------- НОВОЕ: РАСПИСАНИЕ НА ВЫБРАННУЮ ДАТУ ----------
+
+function getDaySchedule(assetId, date) {
+  const { start: dayStart, end: dayEnd } = getDateRange(date);
+
+  const occupied = bookings
+    .filter(b =>
+      b.assetId === assetId &&
+      ['pending', 'approved'].includes(b.status) &&
+      b.start < dayEnd &&
+      b.end > dayStart
+    )
+    .map(b => ({
+      start: Math.max(b.start, dayStart),
+      end: Math.min(b.end, dayEnd)
+    }))
+    .sort((a, b) => a.start - b.start);
+
+  // Объединяем пересекающиеся и соприкасающиеся промежутки
+  const merged = [];
+
+  for (const interval of occupied) {
+    const last = merged[merged.length - 1];
+
+    if (last && interval.start <= last.end) {
+      last.end = Math.max(last.end, interval.end);
+    } else {
+      merged.push({ ...interval });
+    }
+  }
+
+  const free = [];
+  let cursor = dayStart;
+
+  for (const interval of merged) {
+    if (cursor < interval.start) {
+      free.push({
+        start: cursor,
+        end: interval.start
+      });
+    }
+
+    cursor = Math.max(cursor, interval.end);
+  }
+
+  if (cursor < dayEnd) {
+    free.push({
+      start: cursor,
+      end: dayEnd
+    });
+  }
+
+  return { occupied: merged, free };
+}
+
+async function showAssetSchedule(chatId) {
+  const state = users.get(chatId);
+  if (!state || !state.assetId || !state.date) return;
+
+  const asset = findAsset(state.assetId);
+  const schedule = getDaySchedule(state.assetId, state.date);
+
+  const lines = [
+    `📅 <b>РАСПИСАНИЕ НА ${state.date}</b>`,
+    '',
+    `🎮 <b>${asset ? asset.name : state.assetId}</b>`,
+    '',
+    '🔴 <b>ЗАНЯТО:</b>'
+  ];
+
+  if (schedule.occupied.length === 0) {
+    lines.push('Пока нет заявок на эту дату.');
+  } else {
+    for (const interval of schedule.occupied) {
+      lines.push(
+        `• ${formatTime(interval.start)}–${formatTime(interval.end)}`
+      );
+    }
+  }
+
+  lines.push('', '🟢 <b>СВОБОДНОЕ ВРЕМЯ:</b>');
+
+  if (schedule.free.length === 0) {
+    lines.push('На эту дату свободного времени нет.');
+  } else {
+    for (const interval of schedule.free) {
+      lines.push(
+        `• ${formatTime(interval.start)}–${formatTime(interval.end)}`
+      );
+    }
+  }
+
+  lines.push(
+    '',
+    '⚠️ Расписание показывает весь календарный день.',
+    'Часы работы клуба: 10:00–05:00.',
+    '',
+    'Сейчас укажи время начала бронирования в формате ЧЧ:ММ.'
+  );
+
+  users.set(chatId, { ...state, step: 'time' });
+
+  await bot.sendMessage(chatId, lines.join('\n'), {
+    parse_mode: 'HTML',
+    ...menu()
+  });
+
+  await bot.sendMessage(
+    chatId,
+    '⏰ Напиши время начала. Например: 18:00'
+  );
+}
+
+// ---------- ТЕКСТЫ РАЗДЕЛОВ ----------
 
 function priceText() {
   return [
@@ -279,7 +420,7 @@ async function showSchedule(chatId) {
     'Для начала бронирования с 05:00 до 10:00 требуется оформить заявку минимум за 5 часов.',
     'В остальное время заявку нужно оформить минимум за 2 часа.',
     '',
-    'Для бронирования на особое время отправь заявку заранее.'
+    'Чтобы увидеть занятые компьютеры и PS5 на конкретную дату, начни бронирование.'
   ].join('\n');
 
   await sendSection(chatId, 'schedule', text);
@@ -298,6 +439,8 @@ async function showHelp(chatId) {
   await sendSection(chatId, 'help', text);
 }
 
+// ---------- БРОНИРОВАНИЕ ----------
+
 function startBooking(chatId) {
   users.set(chatId, { step: 'category' });
 
@@ -312,7 +455,6 @@ function startBooking(chatId) {
   });
 }
 
-// Выбор дня
 function askDate(chatId) {
   const state = users.get(chatId);
   if (!state) return;
@@ -340,7 +482,6 @@ function askDate(chatId) {
   });
 }
 
-// Выбор месяца
 function askMonth(chatId) {
   const state = users.get(chatId);
   if (!state) return;
@@ -367,15 +508,6 @@ function askMonth(chatId) {
   return bot.sendMessage(chatId, '🗓️ Теперь выбери месяц:', {
     reply_markup: { inline_keyboard: rows }
   });
-}
-
-function askTime(chatId) {
-  users.set(chatId, { ...users.get(chatId), step: 'time' });
-
-  return bot.sendMessage(
-    chatId,
-    '⏰ Напиши время начала в формате ЧЧ:ММ.\nНапример: 18:00'
-  );
 }
 
 function showDurations(chatId) {
@@ -445,6 +577,8 @@ async function showMyBookings(chatId) {
   });
 }
 
+// ---------- КОМАНДЫ ----------
+
 bot.onText(/\/start/, async msg => {
   users.delete(msg.chat.id);
 
@@ -462,6 +596,8 @@ bot.onText(/\/vip/, msg => showVip(msg.chat.id));
 bot.onText(/\/schedule/, msg => showSchedule(msg.chat.id));
 bot.onText(/\/help/, msg => showHelp(msg.chat.id));
 bot.onText(/\/mybookings/, msg => showMyBookings(msg.chat.id));
+
+// ---------- ОБРАБОТКА СООБЩЕНИЙ ----------
 
 bot.on('message', async msg => {
   if (!msg.text || msg.text.startsWith('/')) return;
@@ -550,7 +686,6 @@ bot.on('message', async msg => {
       );
     }
 
-    // Проверяем место непосредственно перед созданием заявки
     const conflict = getBookingConflict(state.assetId, start, end);
 
     if (conflict) {
@@ -633,6 +768,8 @@ bot.on('message', async msg => {
   }
 });
 
+// ---------- ОБРАБОТКА КНОПОК ----------
+
 bot.on('callback_query', async query => {
   const chatId = query.message.chat.id;
   const data = query.data || '';
@@ -669,7 +806,7 @@ bot.on('callback_query', async query => {
       });
     }
 
-    // Выбор конкретного места
+    // Выбор места — далее выбор даты
     else if (data.startsWith('asset:')) {
       if (!state) {
         await bot.answerCallbackQuery(query.id);
@@ -686,7 +823,16 @@ bot.on('callback_query', async query => {
 
       state.assetId = assetId;
 
-      await bot.answerCallbackQuery(query.id);
+      await bot.answerCallbackQuery(query.id, {
+        text: `Выбрано: ${asset.name}`
+      });
+
+      await bot.sendMessage(
+        chatId,
+        `🎮 Выбрано: <b>${asset.name}</b>`,
+        { parse_mode: 'HTML' }
+      );
+
       await askDate(chatId);
     }
 
@@ -712,7 +858,7 @@ bot.on('callback_query', async query => {
       await askMonth(chatId);
     }
 
-    // Выбор месяца; год подставляется автоматически
+    // Выбор месяца, автоматический выбор года
     else if (data.startsWith('date_month:')) {
       if (!state || state.step !== 'date_month' || !state.day) {
         await bot.answerCallbackQuery(query.id);
@@ -730,7 +876,7 @@ bot.on('callback_query', async query => {
 
       const selectedDate = getNextBookingDate(state.day, month);
 
-      if (!selectedDate) {
+      if (!selectedDate || !validDate(selectedDate)) {
         await bot.answerCallbackQuery(query.id, {
           text: 'Такой даты не существует.'
         });
@@ -751,12 +897,8 @@ bot.on('callback_query', async query => {
         text: `Дата выбрана: ${selectedDate}`
       });
 
-      await bot.sendMessage(
-        chatId,
-        `✅ Дата бронирования: ${selectedDate}`
-      );
-
-      await askTime(chatId);
+      // НОВОЕ: сразу показываем занятость и свободные промежутки
+      await showAssetSchedule(chatId);
     }
 
     // Выбор длительности
@@ -801,7 +943,6 @@ bot.on('callback_query', async query => {
         return;
       }
 
-      // Перед подтверждением повторно проверяем, не занял ли место кто-то другой
       if (action === 'approve') {
         const conflict = bookings.find(b =>
           b.id !== booking.id &&
