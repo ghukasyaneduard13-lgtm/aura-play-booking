@@ -1,19 +1,20 @@
-```javascript
 require('dotenv').config();
 
 const TelegramBot = require('node-telegram-bot-api');
 const { createClient } = require('@supabase/supabase-js');
 const http = require('http');
 
-// ==================== НАСТРОЙКИ ====================
+// =============== НАСТРОЙКИ ===============
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = process.env.ADMIN_ID;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const {
+  BOT_TOKEN,
+  ADMIN_ID,
+  SUPABASE_URL,
+  SUPABASE_KEY
+} = process.env;
 
 if (!BOT_TOKEN || !ADMIN_ID || !SUPABASE_URL || !SUPABASE_KEY) {
-  console.error('Ошибка: проверь переменные окружения в Render.');
+  console.error('Ошибка: проверь переменные окружения Render.');
   process.exit(1);
 }
 
@@ -37,7 +38,7 @@ const assets = [
 
 const sessions = new Map();
 
-// ==================== КЛАВИАТУРЫ ====================
+// =============== КЛАВИАТУРЫ ===============
 
 function mainKeyboard() {
   return {
@@ -53,9 +54,9 @@ function mainKeyboard() {
 
 function inlineAssets() {
   return {
-    inline_keyboard: assets.map(asset => [{
+    inline_keyboard: assets.map((asset) => [{
       text: asset.name,
-      callback_data: `asset:${asset.id}`
+      callback_data: 'asset:' + asset.id
     }])
   };
 }
@@ -69,119 +70,66 @@ function cancelKeyboard() {
   };
 }
 
-// ==================== ОБЩИЕ ФУНКЦИИ ====================
+function adminKeyboard(id) {
+  return {
+    inline_keyboard: [[
+      {
+        text: '✅ Подтвердить',
+        callback_data: 'admin_approve:' + id
+      },
+      {
+        text: '❌ Отклонить',
+        callback_data: 'admin_reject:' + id
+      }
+    ]]
+  };
+}
 
-function sendMenu(chatId, text = 'Выбери нужный раздел:') {
+// =============== ОБЩИЕ ФУНКЦИИ ===============
+
+async function sendMenu(chatId, text = 'Выбери нужный раздел:') {
   return bot.sendMessage(chatId, text, {
     reply_markup: mainKeyboard()
   });
-}
-
-function getSession(userId) {
-  if (!sessions.has(userId)) {
-    sessions.set(userId, {});
-  }
-  return sessions.get(userId);
-}
-
-function formatDate(date) {
-  return date.toISOString().slice(0, 10);
-}
-
-function parseDate(value) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-
-  const date = new Date(`${value}T12:00:00Z`);
-
-  if (formatDate(date) !== value) return null;
-
-  return date;
-}
-
-function parseTime(value) {
-  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
-    return null;
-  }
-
-  const [hours, minutes] = value.split(':').map(Number);
-  return hours * 60 + minutes;
-}
-
-function formatTime(minutes) {
-  const normalized = ((minutes % 1440) + 1440) % 1440;
-  const hours = Math.floor(normalized / 60);
-  const mins = normalized % 60;
-
-  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
-}
-
-function dateTimeMinutes(date, time) {
-  const parsedDate = parseDate(date);
-  const parsedTime = parseTime(time);
-
-  if (!parsedDate || parsedTime === null) return null;
-
-  return Math.floor(parsedDate.getTime() / 60000) + parsedTime;
-}
-
-function isWithinOpeningHours(date, startTime, duration) {
-  const start = dateTimeMinutes(date, startTime);
-
-  if (start === null) return false;
-
-  const startDate = parseDate(date);
-  if (!startDate) return false;
-
-  const opening = dateTimeMinutes(date, '10:00');
-  const closing = opening + 19 * 60;
-
-  const finish = start + duration * 60;
-
-  return start >= opening && finish <= closing;
-}
-
-function getPrice(asset, startTime, duration) {
-  const start = parseTime(startTime);
-
-  if (start === null) return 0;
-
-  let hourlyRate;
-
-  if (asset.type === 'vip') {
-    hourlyRate = start >= 20 * 60 || start < 5 * 60
-      ? 1400
-      : 1200;
-  } else {
-    hourlyRate = start >= 20 * 60 || start < 5 * 60
-      ? 1200
-      : 1000;
-  }
-
-  return hourlyRate * duration;
 }
 
 function getAsset(id) {
   return assets.find(asset => asset.id === id);
 }
 
-function readBookingDetails(row) {
-  let details = {};
+function parseDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
 
-  try {
-    details = JSON.parse(row.comment || '{}');
-  } catch {
-    details = {};
-  }
+  const date = new Date(value + 'T12:00:00Z');
 
-  return {
-    start: details.start || row.start_time,
-    end: details.end || '',
-    price: details.price || 0,
-    customerName: details.customerName || row.customer_name || 'Не указано',
-    phone: details.phone || row.phone || 'Не указан',
-    commentText: details.commentText || '',
-    assetName: row.asset_name
-  };
+  if (date.toISOString().slice(0, 10) !== value) return null;
+
+  return date;
+}
+
+function parseTime(value) {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) return null;
+
+  const parts = value.split(':').map(Number);
+  return parts[0] * 60 + parts[1];
+}
+
+function dateTimeMinutes(date, time) {
+  const d = parseDate(date);
+  const t = parseTime(time);
+
+  if (!d || t === null) return null;
+
+  return Math.floor(d.getTime() / 60000) + t;
+}
+
+function formatTime(minutes) {
+  const value = ((minutes % 1440) + 1440) % 1440;
+  const hours = Math.floor(value / 60);
+  const mins = value % 60;
+
+  return String(hours).padStart(2, '0') + ':' +
+    String(mins).padStart(2, '0');
 }
 
 function bookingEnd(date, startTime, duration) {
@@ -189,17 +137,51 @@ function bookingEnd(date, startTime, duration) {
 
   if (start === null) return '';
 
-  const finish = start + duration * 60;
-  const endDate = new Date(finish * 60000);
+  const end = new Date((start + duration * 60) * 60000);
 
-  return `${formatDate(endDate)} ${formatTime(finish)}`;
+  return end.toISOString().slice(0, 10) + ' ' +
+    formatTime(start + duration * 60);
 }
 
 function overlaps(start1, end1, start2, end2) {
   return start1 < end2 && start2 < end1;
 }
 
-// ==================== SUPABASE ====================
+function getPrice(asset, startTime, duration) {
+  const start = parseTime(startTime);
+
+  if (start === null) return 0;
+
+  const night = start >= 20 * 60 || start < 5 * 60;
+
+  if (asset.type === 'vip') {
+    return (night ? 1400 : 1200) * duration;
+  }
+
+  return (night ? 1200 : 1000) * duration;
+}
+
+function readBookingDetails(row) {
+  let meta = {};
+
+  try {
+    meta = JSON.parse(row.comment || '{}');
+  } catch {
+    meta = {};
+  }
+
+  const asset = getAsset(row.asset_name);
+
+  return {
+    start: meta.start || row.start_time || '',
+    end: meta.end || '',
+    price: meta.price || 0,
+    customerName: meta.customerName || row.customer_name || 'Не указано',
+    phone: meta.phone || row.phone || 'Не указан',
+    commentText: meta.commentText || '',
+    assetName: asset ? asset.name : row.asset_name
+  };
+}
 
 async function getBookings() {
   const { data, error } = await supabase
@@ -207,10 +189,7 @@ async function getBookings() {
     .select('*')
     .in('status', ['pending', 'approved']);
 
-  if (error) {
-    console.error('Ошибка загрузки бронирований:', error.message);
-    throw error;
-  }
+  if (error) throw error;
 
   return data || [];
 }
@@ -219,13 +198,15 @@ async function findConflict(assetId, date, startTime, duration) {
   const bookings = await getBookings();
 
   const newStart = dateTimeMinutes(date, startTime);
+
+  if (newStart === null) return null;
+
   const newEnd = newStart + duration * 60;
 
   for (const booking of bookings) {
     if (booking.asset_name !== assetId) continue;
 
     const details = readBookingDetails(booking);
-
     const existingStart = dateTimeMinutes(
       booking.booking_date,
       details.start || booking.start_time
@@ -243,115 +224,114 @@ async function findConflict(assetId, date, startTime, duration) {
   return null;
 }
 
-// ==================== СТАРТ И КОМАНДЫ ====================
+function isWithinOpeningHours(date, startTime, duration) {
+  const start = dateTimeMinutes(date, startTime);
 
-bot.onText(/^\/start(?:@\w+)?$/, async msg => {
-  const chatId = msg.chat.id;
+  if (start === null) return false;
 
+  const opening = dateTimeMinutes(date, '10:00');
+  const closing = opening + 19 * 60;
+
+  return start >= opening && start + duration * 60 <= closing;
+}
+
+// =============== ЦЕНЫ И VIP ===============
+
+async function showPrices(chatId) {
   await sendMenu(
-    chatId,
-    '🎮 Добро пожаловать в Aura Play!\n\n' +
-    'Бронируй компьютеры, PlayStation 5 и VIP-комнаты прямо здесь.\n\n' +
-    'Выбери действие в меню.'
-  );
-});
-
-bot.onText(/^\/help(?:@\w+)?$/, async msg => {
-  await sendMenu(
-    msg.chat.id,
-    'ℹ️ Помощь Aura Play\n\n' +
-    '/start — главное меню\n' +
-    '/book — забронировать место\n' +
-    '/prices — цены\n' +
-    '/vip — VIP-комнаты\n' +
-    '/schedule — расписание\n' +
-    '/mybookings — мои бронирования\n\n' +
-    `📞 Телефон: ${SUPPORT_PHONE}\n` +
-    `✈️ Telegram: ${SUPPORT_TELEGRAM}`
-  );
-});
-
-bot.onText(/^\/book(?:@\w+)?$/, msg => {
-  startBooking(msg.chat.id, msg.from.id);
-});
-
-bot.onText(/^\/prices(?:@\w+)?$/, msg => {
-  showPrices(msg.chat.id);
-});
-
-bot.onText(/^\/vip(?:@\w+)?$/, msg => {
-  showVip(msg.chat.id);
-});
-
-bot.onText(/^\/schedule(?:@\w+)?$/, async msg => {
-  await showSchedule(msg.chat.id);
-});
-
-bot.onText(/^\/mybookings(?:@\w+)?$/, async msg => {
-  await showMyBookings(msg.chat.id, msg.from.id);
-});
-
-// ==================== ЦЕНЫ ====================
-
-function showPrices(chatId) {
-  return bot.sendMessage(
     chatId,
     '💰 ЦЕНЫ AURA PLAY\n\n' +
-    '🎮 Компьютеры:\n' +
-    '• 10:00–20:00 — 1000 драм/час\n' +
-    '• 20:00–05:00 — 1200 драм/час\n\n' +
-    '🎮 PlayStation 5:\n' +
-    '• 10:00–20:00 — 1000 драм/час\n' +
-    '• 20:00–05:00 — 1200 драм/час\n\n' +
+    '🎮 Компьютеры и PlayStation 5:\n' +
+    '10:00–20:00 — 1000 драм/час\n' +
+    '20:00–05:00 — 1200 драм/час\n\n' +
     '👑 VIP-комнаты:\n' +
-    '• 10:00–20:00 — 1200 драм/час\n' +
-    '• 20:00–05:00 — 1400 драм/час\n\n' +
-    'Для бронирования нажми «🎮 Забронировать».',
-    { reply_markup: mainKeyboard() }
+    '10:00–20:00 — 1200 драм/час\n' +
+    '20:00–05:00 — 1400 драм/час\n\n' +
+    'Для бронирования нажми «🎮 Забронировать».'
   );
 }
 
-function showVip(chatId) {
-  return bot.sendMessage(
+async function showVip(chatId) {
+  await sendMenu(
     chatId,
-    '👑 VIP-комнаты Aura Play\n\n' +
-    'У нас доступны две VIP-комнаты:\n' +
+    '👑 VIP-КОМНАТЫ AURA PLAY\n\n' +
+    'Доступны две комнаты:\n' +
     '• VIP-комната №1\n' +
     '• VIP-комната №2\n\n' +
-    '💰 Стоимость:\n' +
-    '• Днём — 1200 драм/час\n' +
-    '• Вечером и ночью — 1400 драм/час\n\n' +
-    'Нажми «🎮 Забронировать», чтобы выбрать комнату.',
-    { reply_markup: mainKeyboard() }
+    'Днём — 1200 драм/час.\n' +
+    'Вечером и ночью — 1400 драм/час.\n\n' +
+    'Нажми «🎮 Забронировать», чтобы выбрать комнату.'
   );
 }
 
-// ==================== НАЧАЛО БРОНИРОВАНИЯ ====================
+// =============== БРОНИРОВАНИЕ ===============
 
 async function startBooking(chatId, userId) {
   sessions.set(userId, { step: 'asset' });
 
   await bot.sendMessage(
     chatId,
-    '🎮 Выбери, что хочешь забронировать:',
+    '🎮 Выбери место для бронирования:',
     { reply_markup: inlineAssets() }
   );
 }
 
-// ==================== ОБРАБОТКА КНОПОК ====================
+bot.onText(/^\/start(?:@\w+)?$/, async msg => {
+  await sendMenu(
+    msg.chat.id,
+    '🎮 Добро пожаловать в Aura Play!\n\n' +
+    'Здесь ты можешь забронировать компьютер, PlayStation 5 ' +
+    'или VIP-комнату.\n\nВыбери действие в меню.'
+  );
+});
+
+bot.onText(/^\/help(?:@\w+)?$/, async msg => {
+  await sendMenu(
+    msg.chat.id,
+    'ℹ️ ПОМОЩЬ AURA PLAY\n\n' +
+    '/start — главное меню\n' +
+    '/book — бронирование\n' +
+    '/prices — цены\n' +
+    '/vip — VIP-комнаты\n' +
+    '/schedule — расписание\n' +
+    '/mybookings — мои бронирования\n\n' +
+    'Телефон: ' + SUPPORT_PHONE + '\n' +
+    'Telegram: ' + SUPPORT_TELEGRAM
+  );
+});
+
+bot.onText(/^\/book(?:@\w+)?$/, msg =>
+  startBooking(msg.chat.id, msg.from.id)
+);
+
+bot.onText(/^\/prices(?:@\w+)?$/, msg =>
+  showPrices(msg.chat.id)
+);
+
+bot.onText(/^\/vip(?:@\w+)?$/, msg =>
+  showVip(msg.chat.id)
+);
+
+bot.onText(/^\/schedule(?:@\w+)?$/, msg =>
+  showSchedule(msg.chat.id)
+);
+
+bot.onText(/^\/mybookings(?:@\w+)?$/, msg =>
+  showMyBookings(msg.chat.id, msg.from.id)
+);
+
+// =============== НАЖАТИЯ НА КНОПКИ ===============
 
 bot.on('callback_query', async query => {
   const chatId = query.message.chat.id;
   const userId = query.from.id;
-  const data = query.data;
-  const session = getSession(userId);
+  const data = query.data || '';
 
   try {
     await bot.answerCallbackQuery(query.id);
 
     if (data === 'cancel_booking') {
       sessions.delete(userId);
-
       await sendMenu(chatId, '❌ Бронирование отменено.');
       return;
     }
@@ -372,8 +352,8 @@ bot.on('callback_query', async query => {
 
       await bot.sendMessage(
         chatId,
-        `✅ Выбрано: ${asset.name}\n\n` +
-        '📅 Введи дату бронирования в формате ГГГГ-ММ-ДД.\n' +
+        '✅ Выбрано: ' + asset.name + '\n\n' +
+        '📅 Введи дату в формате ГГГГ-ММ-ДД.\n' +
         'Например: 2026-10-15',
         { reply_markup: cancelKeyboard() }
       );
@@ -381,19 +361,21 @@ bot.on('callback_query', async query => {
       return;
     }
 
-    if (data.startsWith('admin_approve:') ||
-        data.startsWith('admin_reject:')) {
+    if (
+      data.startsWith('admin_approve:') ||
+      data.startsWith('admin_reject:')
+    ) {
       if (String(userId) !== String(ADMIN_ID)) {
-        await bot.sendMessage(chatId, 'У тебя нет доступа к этой функции.');
+        await bot.sendMessage(chatId, '⛔ У тебя нет доступа.');
         return;
       }
 
       const [action, bookingId] = data.split(':');
-      const newStatus = action === 'admin_approve' ? 'approved' : 'rejected';
+      const status = action === 'admin_approve' ? 'approved' : 'rejected';
 
       const { data: booking, error } = await supabase
         .from('bookings')
-        .update({ status: newStatus })
+        .update({ status })
         .eq('id', bookingId)
         .eq('status', 'pending')
         .select('*')
@@ -411,31 +393,29 @@ bot.on('callback_query', async query => {
 
       const details = readBookingDetails(booking);
 
-      const userMessage = newStatus === 'approved'
+      const answer = status === 'approved'
         ? '✅ Твоё бронирование подтверждено!\n\n'
         : '❌ К сожалению, бронирование отклонено.\n\n';
 
       await bot.sendMessage(
         booking.telegram_id,
-        userMessage +
-        `🎮 Место: ${details.assetName}\n` +
-        `📅 Дата: ${booking.booking_date}\n` +
-        `🕒 Время: ${details.start}\n` +
-        `⏳ Длительность: ${booking.duration} ч.\n` +
-        `💰 Стоимость: ${details.price} драм`
-      ).catch(err => {
-        console.error('Не удалось уведомить пользователя:', err.message);
-      });
+        answer +
+        '🎮 Место: ' + details.assetName + '\n' +
+        '📅 Дата: ' + booking.booking_date + '\n' +
+        '🕒 Время: ' + details.start + '\n' +
+        '⏳ Длительность: ' + booking.duration + ' ч.\n' +
+        '💰 Стоимость: ' + details.price + ' драм'
+      ).catch(err => console.error('Ошибка уведомления:', err.message));
 
       await bot.sendMessage(
         chatId,
-        `✅ Заявка №${bookingId} обработана: ${newStatus}`
+        '✅ Заявка №' + bookingId + ' обработана.'
       );
 
       return;
     }
   } catch (error) {
-    console.error('Ошибка callback:', error.message);
+    console.error('Ошибка кнопки:', error.message);
 
     await bot.sendMessage(
       chatId,
@@ -444,10 +424,10 @@ bot.on('callback_query', async query => {
   }
 });
 
-// ==================== ТЕКСТОВЫЙ ВВОД ====================
+// =============== ВВОД ТЕКСТА ===============
 
 bot.on('message', async msg => {
-  if (!msg.text) return;
+  if (!msg.text || !msg.from) return;
 
   const text = msg.text.trim();
   const chatId = msg.chat.id;
@@ -483,9 +463,9 @@ bot.on('message', async msg => {
   if (text === '📞 Контакты') {
     await sendMenu(
       chatId,
-      `📞 Контакты Aura Play\n\n` +
-      `Телефон: ${SUPPORT_PHONE}\n` +
-      `Telegram: ${SUPPORT_TELEGRAM}`
+      '📞 КОНТАКТЫ AURA PLAY\n\n' +
+      'Телефон: ' + SUPPORT_PHONE + '\n' +
+      'Telegram: ' + SUPPORT_TELEGRAM
     );
     return;
   }
@@ -493,7 +473,8 @@ bot.on('message', async msg => {
   if (text === 'ℹ️ Помощь') {
     await sendMenu(
       chatId,
-      'ℹ️ Используй кнопки меню для бронирования, просмотра цен и своих заявок.'
+      'ℹ️ Используй меню для бронирования, просмотра цен ' +
+      'и проверки своих заявок.'
     );
     return;
   }
@@ -508,7 +489,7 @@ bot.on('message', async msg => {
       if (!date) {
         await bot.sendMessage(
           chatId,
-          '❌ Неверная дата. Используй формат ГГГГ-ММ-ДД.'
+          '❌ Неверная дата. Пример: 2026-10-15'
         );
         return;
       }
@@ -526,10 +507,9 @@ bot.on('message', async msg => {
 
       await bot.sendMessage(
         chatId,
-        '🕒 Введи время начала бронирования в формате ЧЧ:ММ.\n' +
-        'Например: 18:00'
+        '🕒 Введи время начала в формате ЧЧ:ММ.\nНапример: 18:00',
+        { reply_markup: cancelKeyboard() }
       );
-
       return;
     }
 
@@ -537,7 +517,7 @@ bot.on('message', async msg => {
       if (parseTime(text) === null) {
         await bot.sendMessage(
           chatId,
-          '❌ Неверное время. Введи его в формате ЧЧ:ММ, например 18:00.'
+          '❌ Неверное время. Например: 18:00'
         );
         return;
       }
@@ -547,10 +527,9 @@ bot.on('message', async msg => {
 
       await bot.sendMessage(
         chatId,
-        '⏳ На сколько часов бронировать?\n\n' +
-        'Введи число от 1 до 6.'
+        '⏳ На сколько часов бронировать?\nВведи число от 1 до 6.',
+        { reply_markup: cancelKeyboard() }
       );
-
       return;
     }
 
@@ -558,18 +537,23 @@ bot.on('message', async msg => {
       const duration = Number(text);
 
       if (!Number.isInteger(duration) || duration < 1 || duration > 6) {
-        await bot.sendMessage(chatId, '❌ Введи число от 1 до 6.');
+        await bot.sendMessage(chatId, '❌ Введи целое число от 1 до 6.');
         return;
       }
 
       const asset = getAsset(session.assetId);
 
+      if (!asset) {
+        sessions.delete(userId);
+        await sendMenu(chatId, '❌ Место не найдено. Начни заново.');
+        return;
+      }
+
       if (!isWithinOpeningHours(session.date, session.startTime, duration)) {
         await bot.sendMessage(
           chatId,
-          '❌ Это время выходит за часы работы.\n\n' +
-          'Aura Play работает с 10:00 до 05:00 следующего дня.\n' +
-          'Выбери другое время или дату.'
+          '❌ Это время выходит за часы работы.\n' +
+          'Aura Play работает с 10:00 до 05:00 следующего дня.'
         );
         return;
       }
@@ -584,11 +568,9 @@ bot.on('message', async msg => {
       if (conflict) {
         await bot.sendMessage(
           chatId,
-          '❌ Это место уже занято на выбранное время.\n\n' +
-          'Введи новую дату в формате ГГГГ-ММ-ДД.',
+          '❌ Это место уже занято. Введи другую дату в формате ГГГГ-ММ-ДД.',
           { reply_markup: cancelKeyboard() }
         );
-
         session.step = 'date';
         return;
       }
@@ -599,15 +581,15 @@ bot.on('message', async msg => {
 
       await bot.sendMessage(
         chatId,
-        '👤 Введи своё имя:'
+        '👤 Введи своё имя:',
+        { reply_markup: cancelKeyboard() }
       );
-
       return;
     }
 
     if (session.step === 'name') {
       if (text.length < 2 || text.length > 80) {
-        await bot.sendMessage(chatId, '❌ Введи имя длиной от 2 до 80 символов.');
+        await bot.sendMessage(chatId, '❌ Имя должно содержать от 2 до 80 символов.');
         return;
       }
 
@@ -616,18 +598,15 @@ bot.on('message', async msg => {
 
       await bot.sendMessage(
         chatId,
-        '📞 Введи номер телефона для связи:'
+        '📞 Введи номер телефона:',
+        { reply_markup: cancelKeyboard() }
       );
-
       return;
     }
 
     if (session.step === 'phone') {
       if (!/^[+\d()\-\s]{6,25}$/.test(text)) {
-        await bot.sendMessage(
-          chatId,
-          '❌ Введи корректный номер телефона.'
-        );
+        await bot.sendMessage(chatId, '❌ Проверь номер телефона и введи снова.');
         return;
       }
 
@@ -636,9 +615,9 @@ bot.on('message', async msg => {
 
       await bot.sendMessage(
         chatId,
-        '💬 Добавь комментарий к бронированию или отправь «-», если комментарий не нужен.'
+        '💬 Напиши комментарий или отправь дефис «-», если он не нужен.',
+        { reply_markup: cancelKeyboard() }
       );
-
       return;
     }
 
@@ -649,7 +628,7 @@ bot.on('message', async msg => {
 
       if (!asset) {
         sessions.delete(userId);
-        await sendMenu(chatId, '❌ Место не найдено. Начни бронирование заново.');
+        await sendMenu(chatId, '❌ Место не найдено. Начни заново.');
         return;
       }
 
@@ -665,8 +644,8 @@ bot.on('message', async msg => {
 
         await bot.sendMessage(
           chatId,
-          '❌ Это время только что заняли.\n' +
-          'Введи другую дату в формате ГГГГ-ММ-ДД.'
+          '❌ Это время только что заняли. Введи другую дату.',
+          { reply_markup: cancelKeyboard() }
         );
         return;
       }
@@ -702,58 +681,44 @@ bot.on('message', async msg => {
         .select('*')
         .single();
 
-      if (error) {
-        console.error('Ошибка сохранения:', error.message);
-
-        await bot.sendMessage(
-          chatId,
-          '❌ Не удалось сохранить заявку. Попробуй позже или свяжись с администратором.'
-        );
-        return;
-      }
+      if (error) throw error;
 
       const bookingInfo =
-        `🆕 НОВАЯ ЗАЯВКА AURA PLAY\n\n` +
-        `🆔 Заявка: №${booking.id}\n` +
-        `👤 Имя: ${session.customerName}\n` +
-        `📞 Телефон: ${session.phone}\n` +
-        `🆔 Telegram ID: ${userId}\n` +
-        `🎮 Место: ${asset.name}\n` +
-        `📅 Дата: ${session.date}\n` +
-        `🕒 Время: ${session.startTime}\n` +
-        `⏳ Длительность: ${session.duration} ч.\n` +
-        `💰 Стоимость: ${session.price} драм\n` +
-        `💬 Комментарий: ${session.commentText || 'Нет'}`;
+        '🆕 НОВАЯ ЗАЯВКА AURA PLAY\n\n' +
+        '🆔 Заявка: №' + booking.id + '\n' +
+        '👤 Имя: ' + session.customerName + '\n' +
+        '📞 Телефон: ' + session.phone + '\n' +
+        '🆔 Telegram ID: ' + userId + '\n' +
+        '🎮 Место: ' + asset.name + '\n' +
+        '📅 Дата: ' + session.date + '\n' +
+        '🕒 Время: ' + session.startTime + '\n' +
+        '⏳ Длительность: ' + session.duration + ' ч.\n' +
+        '💰 Стоимость: ' + session.price + ' драм\n' +
+        '💬 Комментарий: ' + (session.commentText || 'Нет');
 
-      await bot.sendMessage(ADMIN_ID, bookingInfo, {
-        reply_markup: {
-          inline_keyboard: [
-            [
-              {
-                text: '✅ Подтвердить',
-                callback_data: `admin_approve:${booking.id}`
-              },
-              {
-                text: '❌ Отклонить',
-                callback_data: `admin_reject:${booking.id}`
-              }
-            ]
-          ]
-        }
-      });
+      try {
+        await bot.sendMessage(
+          ADMIN_ID,
+          bookingInfo,
+          { reply_markup: adminKeyboard(booking.id) }
+        );
+      } catch (error) {
+        console.error('Не удалось уведомить администратора:', error.message);
+      }
 
+      const completed = { ...session };
       sessions.delete(userId);
 
       await sendMenu(
         chatId,
-        '✅ Заявка успешно отправлена!\n\n' +
-        `🎮 Место: ${asset.name}\n` +
-        `📅 Дата: ${session.date}\n` +
-        `🕒 Время: ${session.startTime}\n` +
-        `⏳ Длительность: ${session.duration} ч.\n` +
-        `💰 Стоимость: ${session.price} драм\n\n` +
+        '✅ Заявка отправлена!\n\n' +
+        '🎮 Место: ' + asset.name + '\n' +
+        '📅 Дата: ' + completed.date + '\n' +
+        '🕒 Время: ' + completed.startTime + '\n' +
+        '⏳ Длительность: ' + completed.duration + ' ч.\n' +
+        '💰 Стоимость: ' + completed.price + ' драм\n\n' +
         '⏳ Ожидай подтверждения администратора.\n' +
-        `Номер заявки: №${booking.id}`
+        'Номер заявки: №' + booking.id
       );
     }
   } catch (error) {
@@ -761,12 +726,12 @@ bot.on('message', async msg => {
 
     await bot.sendMessage(
       chatId,
-      '⚠️ Произошла ошибка. Попробуй ещё раз.'
+      '❌ Не удалось обработать запрос. Попробуй позже.'
     ).catch(() => {});
   }
 });
 
-// ==================== МОИ БРОНИРОВАНИЯ ====================
+// =============== МОИ БРОНИРОВАНИЯ ===============
 
 async function showMyBookings(chatId, userId) {
   try {
@@ -796,34 +761,30 @@ async function showMyBookings(chatId, userId) {
       }[booking.status] || booking.status;
 
       message +=
-        `🆔 №${booking.id}\n` +
-        `🎮 Место: ${details.assetName}\n` +
-        `📅 Дата: ${booking.booking_date}\n` +
-        `🕒 Время: ${details.start}\n` +
-        `⏳ Длительность: ${booking.duration} ч.\n` +
-        `💰 Цена: ${details.price} драм\n` +
-        `Статус: ${status}\n\n`;
+        '🆔 №' + booking.id + '\n' +
+        '🎮 Место: ' + details.assetName + '\n' +
+        '📅 Дата: ' + booking.booking_date + '\n' +
+        '🕒 Время: ' + details.start + '\n' +
+        '⏳ Длительность: ' + booking.duration + ' ч.\n' +
+        '💰 Цена: ' + details.price + ' драм\n' +
+        'Статус: ' + status + '\n\n';
     }
 
     await sendMenu(chatId, message);
   } catch (error) {
-    console.error('Ошибка загрузки бронирований:', error.message);
-
-    await bot.sendMessage(
-      chatId,
-      '❌ Не удалось загрузить бронирования.'
-    );
+    console.error('Ошибка загрузки заявок:', error.message);
+    await bot.sendMessage(chatId, '❌ Не удалось загрузить бронирования.');
   }
 }
 
-// ==================== РАСПИСАНИЕ ====================
+// =============== РАСПИСАНИЕ ===============
 
 async function showSchedule(chatId) {
   try {
     const bookings = await getBookings();
 
     if (bookings.length === 0) {
-      await sendMenu(chatId, '🕒 Пока нет активных бронирований. Места свободны!');
+      await sendMenu(chatId, '🕒 Активных бронирований пока нет.');
       return;
     }
 
@@ -833,24 +794,24 @@ async function showSchedule(chatId) {
       const details = readBookingDetails(booking);
 
       message +=
-        `🎮 ${details.assetName}\n` +
-        `📅 ${booking.booking_date}\n` +
-        `🕒 ${details.start} — ${details.end || 'время окончания не указано'}\n` +
-        `Статус: ${booking.status === 'approved' ? '✅ Подтверждено' : '⏳ Ожидает'}\n\n`;
+        '🎮 ' + details.assetName + '\n' +
+        '📅 ' + booking.booking_date + '\n' +
+        '🕒 ' + details.start + ' — ' +
+        (details.end || 'время окончания не указано') + '\n' +
+        'Статус: ' +
+        (booking.status === 'approved'
+          ? '✅ Подтверждено'
+          : '⏳ Ожидает подтверждения') + '\n\n';
     }
 
     await sendMenu(chatId, message);
   } catch (error) {
     console.error('Ошибка расписания:', error.message);
-
-    await bot.sendMessage(
-      chatId,
-      '❌ Не удалось загрузить расписание.'
-    );
+    await bot.sendMessage(chatId, '❌ Не удалось загрузить расписание.');
   }
 }
 
-// ==================== ОБРАБОТКА ОШИБОК ====================
+// =============== ОБРАБОТКА ОШИБОК ===============
 
 bot.on('polling_error', error => {
   console.error('Ошибка Telegram polling:', error.message);
@@ -860,15 +821,17 @@ bot.on('error', error => {
   console.error('Ошибка бота:', error.message);
 });
 
-// Render: HTTP-сервер для проверки доступности сервиса.
+// =============== СЕРВЕР RENDER ===============
+
 const PORT = process.env.PORT || 10000;
 
 const server = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.writeHead(200, {
+    'Content-Type': 'text/plain; charset=utf-8'
+  });
   res.end('Aura Play Booking Bot is running');
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Aura Play запущен. Порт: ${PORT}`);
+  console.log('Aura Play запущен. Порт: ' + PORT);
 });
-```
