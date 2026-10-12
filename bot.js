@@ -27,6 +27,33 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 // ========== ДАННЫЕ ==========
 const users = new Map();
 let bookings = [];
+async function loadBookings() {
+  const { data, error } = await supabase
+    .from('bookings')
+    .select('*');
+
+  if (error) {
+    console.error('Ошибка загрузки бронирований:', error.message);
+    return;
+  }
+
+  bookings = (data || []).map(row => {
+    const extra = row.comment ? JSON.parse(row.comment) : {};
+
+    return {
+      ...extra,
+      id: Number(row.id),
+      chatId: Number(row.telegram_id),
+      assetId: row.asset_name,
+      start: new Date(`${row.booking_date}T${row.start_time}+04:00`).getTime(),
+      duration: Number(row.duration),
+      status: row.status
+    };
+  });
+
+  nextBookingId = Math.max(0, ...bookings.map(b => b.id)) + 1;
+  console.log(`Загружено бронирований: ${bookings.length}`);
+}
 let nextBookingId = 1;
 
 const SUPPORT_PHONE = '041780737';
