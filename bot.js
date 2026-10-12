@@ -1,10 +1,11 @@
+
 const TelegramBot = require('node-telegram-bot-api');
 
 const TOKEN = process.env.BOT_TOKEN;
 const ADMIN_ID = String(process.env.ADMIN_ID || '');
 
 if (!TOKEN || !ADMIN_ID) {
-  throw new Error('Не заданы BOT_TOKEN или ADMIN_ID');
+  throw new Error('Не заданы BOT_TOKEN или ADMIN_ID в настройках Render');
 }
 
 const bot = new TelegramBot(TOKEN, { polling: true });
@@ -13,363 +14,409 @@ const users = new Map();
 const bookings = [];
 let nextBookingId = 1;
 
+const SUPPORT_PHONE = '041780737';
+const SUPPORT_TELEGRAM = '@Aura_Pllay';
+const OPEN_TEXT = 'Ежедневно: 10:00–05:00';
+
 const assets = {
-  computer: [
-    { id: 'PC1', name: 'Компьютер № 1' },
-    { id: 'PC2', name: 'Компьютер № 2' },
-    { id: 'PC3', name: 'Компьютер № 3' },
-    { id: 'PC4', name: 'Компьютер № 4' },
-    { id: 'PC5', name: 'Компьютер № 5' }
-  ],
+  computer: Array.from({ length: 5 }, (_, i) => ({
+    id: `PC${i + 1}`,
+    name: `Компьютер № ${i + 1}`
+  })),
   ps_normal: [
     { id: 'PSN1', name: 'PS5 Pro — обычная зона № 1' },
     { id: 'PSN2', name: 'PS5 Pro — обычная зона № 2' }
   ],
   ps_vip: [
-    { id: 'PSV1', name: 'PS5 Pro — VIP-зона № 1' },
-    { id: 'PSV2', name: 'PS5 Pro — VIP-зона № 2' }
+    { id: 'PSV1', name: 'PS5 Pro — VIP-комната № 1' },
+    { id: 'PSV2', name: 'PS5 Pro — VIP-комната № 2' }
   ]
+};
+
+// Фото можно добавить позже через Telegram file_id.
+const photos = {
+  home: process.env.PHOTO_HOME || '',
+  booking: process.env.PHOTO_BOOKING || '',
+  prices: process.env.PHOTO_PRICES || '',
+  vip: process.env.PHOTO_VIP || '',
+  schedule: process.env.PHOTO_SCHEDULE || '',
+  help: process.env.PHOTO_HELP || ''
 };
 
 function menu() {
   return {
     reply_markup: {
       keyboard: [
-        ['🎮 Забронировать'],
-        ['📋 Мои заявки', 'ℹ️ Информация']
+        [{ text: '🎮 Забронировать' }, { text: '💰 Посмотреть цены' }],
+        [{ text: '👑 VIP-комнаты' }, { text: '📅 Расписание' }],
+        [{ text: '📋 Мои заявки' }, { text: 'ℹ️ Информация' }],
+        [{ text: '🛠 Техподдержка' }]
       ],
       resize_keyboard: true
     }
   };
 }
 
-function getAsset(id) {
-  return Object.values(assets).flat().find(a => a.id === id);
+async function sendSection(chatId, key, text, options = {}) {
+  const photo = photos[key];
+  if (photo) {
+    try {
+      return await bot.sendPhoto(chatId, photo, {
+        caption: text,
+        parse_mode: 'HTML',
+        ...options
+      });
+    } catch (e) {
+      console.error('Не удалось отправить фото:', e.message);
+    }
+  }
+  return bot.sendMessage(chatId, text, {
+    parse_mode: 'HTML',
+    ...options
+  });
 }
 
 function getRate(category, hour) {
   const daytime = hour >= 10 && hour < 20;
-
   if (category === 'computer') return daytime ? 1000 : 1200;
   if (category === 'ps_normal') return daytime ? 1000 : 1200;
   if (category === 'ps_vip') return daytime ? 1200 : 1400;
-
   return 0;
 }
 
-// Время клуба: Армения, UTC+4.
-const OFFSET = 4 * 60 * 60 * 1000;
-const HOUR = 60 * 60 * 1000;
+function calculatePrice(category, start, duration) {
+  let total = 0;
+  const end = start + duration * 60 * 60 * 1000;
+  for (let t = start; t < end; t += 60 * 60 * 1000) {
+    const date = new Date(t + 4 * 60 * 60 * 1000);
+    total += getRate(category, date.getUTCHours());
+  }
+  return total;
+}
+
+function formatDate(timestamp) {
+  const d = new Date(timestamp + 4 * 60 * 60 * 1000);
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const month = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const year = d.getUTCFullYear();
+  const hour = String(d.getUTCHours()).padStart(2, '0');
+  const min = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${day}.${month}.${year} ${hour}:${min}`;
+}
 
 function toArmeniaTimestamp(date, time) {
-  const [year, month, day] = date.split('-').map(Number);
+  const [day, month, year] = date.split('.').map(Number);
   const [hour, minute] = time.split(':').map(Number);
-
-  return Date.UTC(year, month - 1, day, hour, minute) - OFFSET;
+  return Date.UTC(year, month - 1, day, hour, minute) - 4 * 60 * 60 * 1000;
 }
 
-function calculatePrice(category, start, duration) {
-  const end = start + duration * HOUR;
-  let cursor = start;
-  let total = 0;
-
-  while (cursor < end) {
-    const localTime = cursor + OFFSET;
-    const hour = new Date(localTime).getUTCHours();
-    const nextHour =
-      (Math.floor(localTime / HOUR) + 1) * HOUR - OFFSET;
-    const segmentEnd = Math.min(end, nextHour);
-    const minutes = (segmentEnd - cursor) / 60000;
-
-    total += getRate(category, hour) * minutes / 60;
-    cursor = segmentEnd;
-  }
-
-  return Math.round(total);
+function validDate(date) {
+  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(date)) return false;
+  const [d, m, y] = date.split('.').map(Number);
+  const check = new Date(Date.UTC(y, m - 1, d));
+  return check.getUTCFullYear() === y &&
+    check.getUTCMonth() === m - 1 &&
+    check.getUTCDate() === d;
 }
 
-function formatDate(date) {
-  const [year, month, day] = date.split('-');
-  return `${day}.${month}.${year}`;
-}
-
-function dateIsValid(date) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-
-  const [y, m, d] = date.split('-').map(Number);
-  const parsed = new Date(Date.UTC(y, m - 1, d));
-
-  return parsed.getUTCFullYear() === y &&
-    parsed.getUTCMonth() === m - 1 &&
-    parsed.getUTCDate() === d;
-}
-
-function timeIsValid(time) {
+function validTime(time) {
   if (!/^\d{2}:\d{2}$/.test(time)) return false;
-
   const [h, m] = time.split(':').map(Number);
   return h >= 0 && h <= 23 && m >= 0 && m <= 59;
+}
+
+function bookingLeadHours(startTimestamp) {
+  const d = new Date(startTimestamp + 4 * 60 * 60 * 1000);
+  const hour = d.getUTCHours();
+  return hour >= 5 && hour < 10 ? 5 : 2;
 }
 
 function isAvailable(assetId, start, end) {
   return !bookings.some(b =>
     b.assetId === assetId &&
     ['pending', 'approved'].includes(b.status) &&
-    start < b.end &&
-    end > b.start
+    start < b.end && end > b.start
   );
+}
+
+function findAsset(id) {
+  return Object.values(assets).flat().find(a => a.id === id);
+}
+
+function priceText() {
+  return [
+    '<b>💰 ЦЕНЫ AURA PLAY</b>',
+    '',
+    '<b>Компьютеры:</b>',
+    '10:00–20:00 — 1 000 драм/час',
+    '20:00–10:00 — 1 200 драм/час',
+    '',
+    '<b>PS5 Pro — обычная зона:</b>',
+    '10:00–20:00 — 1 000 драм/час',
+    '20:00–10:00 — 1 200 драм/час',
+    '',
+    '<b>PS5 Pro — VIP-комната:</b>',
+    '10:00–20:00 — 1 200 драм/час',
+    '20:00–10:00 — 1 400 драм/час',
+    '',
+    'Итоговая цена рассчитывается по часам бронирования.'
+  ].join('\n');
+}
+
+async function showPrices(chatId) {
+  await sendSection(chatId, 'prices', priceText());
+}
+
+async function showVip(chatId) {
+  const text = [
+    '<b>👑 VIP-КОМНАТЫ AURA PLAY</b>',
+    '',
+    '1. VIP-комната № 1 — PS5 Pro',
+    '2. VIP-комната № 2 — PS5 Pro',
+    '',
+    'Дневной тариф: 1 200 драм/час.',
+    'Ночной тариф: 1 400 драм/час.',
+    '',
+    'Нажми «🎮 Забронировать», чтобы выбрать комнату.'
+  ].join('\n');
+  await sendSection(chatId, 'vip', text);
+}
+
+async function showSchedule(chatId) {
+  const text = [
+    '<b>📅 РАСПИСАНИЕ AURA PLAY</b>',
+    '',
+    'Основное время работы: 10:00–05:00.',
+    'Время начала бронирования с 05:00 до 10:00 требует оформления минимум за 5 часов.',
+    'В остальное время бронирование нужно оформить минимум за 2 часа.',
+    '',
+    'Для бронирования на особое время отправь заявку заранее.'
+  ].join('\n');
+  await sendSection(chatId, 'schedule', text);
+}
+
+async function showHelp(chatId) {
+  const text = [
+    '<b>🛠 ТЕХНИЧЕСКАЯ ПОДДЕРЖКА AURA PLAY</b>',
+    '',
+    `📞 Телефон: ${SUPPORT_PHONE}`,
+    `💬 Telegram: ${SUPPORT_TELEGRAM}`,
+    '',
+    'По вопросам бронирования, оплаты и работы клуба обращайся к нам.'
+  ].join('\n');
+  await sendSection(chatId, 'help', text);
 }
 
 function startBooking(chatId) {
   users.set(chatId, { step: 'category' });
-
-  bot.sendMessage(chatId, 'Что хочешь забронировать?', {
+  return bot.sendMessage(chatId, '🎮 Что хочешь забронировать?', {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '🖥 Компьютер', callback_data: 'cat:computer' }],
+        [{ text: '💻 Компьютер', callback_data: 'cat:computer' }],
         [{ text: '🎮 PS5 Pro — обычная зона', callback_data: 'cat:ps_normal' }],
-        [{ text: '👑 PS5 Pro — VIP-зона', callback_data: 'cat:ps_vip' }]
+        [{ text: '👑 PS5 Pro — VIP-комната', callback_data: 'cat:ps_vip' }]
       ]
     }
   });
 }
 
 function askDate(chatId) {
-  users.get(chatId).step = 'date';
-
-  bot.sendMessage(
-    chatId,
-    'Укажи дату начала бронирования в формате ГГГГ-ММ-ДД.\nНапример: 2026-10-20'
-  );
+  users.set(chatId, { ...users.get(chatId), step: 'date' });
+  return bot.sendMessage(chatId,
+    '📅 Напиши дату бронирования в формате ДД.ММ.ГГГГ.\nНапример: 25.10.2026');
 }
 
 function askTime(chatId) {
-  users.get(chatId).step = 'time';
-
-  bot.sendMessage(
-    chatId,
-    'Укажи время начала в формате ЧЧ:ММ по времени Армении.\nНапример: 18:30'
-  );
+  users.set(chatId, { ...users.get(chatId), step: 'time' });
+  return bot.sendMessage(chatId,
+    '⏰ Напиши время начала в формате ЧЧ:ММ.\nНапример: 18:00');
 }
 
 function showDurations(chatId) {
-  users.get(chatId).step = 'duration';
-
-  const keyboard = [];
-  for (let i = 1; i <= 12; i += 1) {
-    keyboard.push({
-      text: `${i} ч.`,
-      callback_data: `duration:${i}`
-    });
+  const rows = [];
+  for (let i = 1; i <= 12; i += 3) {
+    rows.push([
+      ...[i, i + 1, i + 2].filter(n => n <= 12).map(n => ({
+        text: `${n} ч.`,
+        callback_data: `duration:${n}`
+      }))
+    ]);
   }
-
-  bot.sendMessage(chatId, 'На сколько часов бронируем?', {
-    reply_markup: {
-      inline_keyboard: [
-        keyboard.slice(0, 4),
-        keyboard.slice(4, 8),
-        keyboard.slice(8, 12)
-      ]
-    }
+  users.set(chatId, { ...users.get(chatId), step: 'duration' });
+  return bot.sendMessage(chatId, '⌛ Выбери длительность бронирования:', {
+    reply_markup: { inline_keyboard: rows }
   });
 }
 
 function askPhone(chatId) {
-  users.get(chatId).step = 'phone';
-
-  bot.sendMessage(
-    chatId,
-    'Напиши свой номер телефона, чтобы администратор мог связаться с тобой.\nНапример: +374XXXXXXXX'
-  );
+  users.set(chatId, { ...users.get(chatId), step: 'phone' });
+  return bot.sendMessage(chatId,
+    '📱 Напиши свой номер телефона для подтверждения брони.');
 }
 
-bot.onText(/^\/start$/, msg => {
-  users.delete(msg.chat.id);
+async function showMyBookings(chatId) {
+  const list = bookings.filter(b => b.chatId === chatId);
+  if (!list.length) {
+    return bot.sendMessage(chatId, 'У тебя пока нет заявок на бронирование.');
+  }
+  const lines = ['<b>📋 ТВОИ ЗАЯВКИ</b>', ''];
+  for (const b of list) {
+    const asset = findAsset(b.assetId);
+    lines.push(
+      `Заявка №${b.id}`,
+      `Место: ${asset ? asset.name : b.assetId}`,
+      `Начало: ${formatDate(b.start)}`,
+      `Окончание: ${formatDate(b.end)}`,
+      `Цена: ${b.price.toLocaleString('ru-RU')} драм`,
+      `Статус: ${b.status === 'pending' ? '⏳ Ожидает подтверждения' :
+        b.status === 'approved' ? '✅ Подтверждена' : '❌ Отклонена'}`,
+      ''
+    );
+  }
+  return bot.sendMessage(chatId, lines.join('\n'), { parse_mode: 'HTML' });
+}
 
-  bot.sendMessage(
+bot.onText(/\/start/, async msg => {
+  users.delete(msg.chat.id);
+  await sendSection(
     msg.chat.id,
-    'Добро пожаловать в Aura Play! 🎮\n\nЗдесь можно забронировать компьютер или PS5 Pro.',
+    'home',
+    '<b>🎮 Добро пожаловать в Aura Play!</b>\n\nЗдесь ты можешь забронировать компьютер или PS5 Pro, посмотреть цены и выбрать VIP-комнату.',
     menu()
   );
 });
 
-bot.on('message', msg => {
-  if (!msg.text || msg.text.startsWith('/')) return;
+bot.onText(/\/book/, msg => startBooking(msg.chat.id));
+bot.onText(/\/prices/, msg => showPrices(msg.chat.id));
+bot.onText(/\/vip/, msg => showVip(msg.chat.id));
+bot.onText(/\/schedule/, msg => showSchedule(msg.chat.id));
+bot.onText(/\/help/, msg => showHelp(msg.chat.id));
+bot.onText(/\/mybookings/, msg => showMyBookings(msg.chat.id));
 
+bot.on('message', async msg => {
+  if (!msg.text || msg.text.startsWith('/')) return;
   const chatId = msg.chat.id;
   const text = msg.text.trim();
-  const state = users.get(chatId);
 
-  if (text === '🎮 Забронировать') {
-    startBooking(chatId);
-    return;
-  }
-
-  if (text === '📋 Мои заявки') {
-    const mine = bookings.filter(b => b.userId === chatId);
-
-    if (!mine.length) {
-      bot.sendMessage(chatId, 'У тебя пока нет заявок.', menu());
-      return;
-    }
-
-    const details = mine.map(b =>
-      `Заявка №${b.id}\n` +
-      `${b.assetName}\n` +
-      `${formatDate(b.date)} в ${b.time}\n` +
-      `${b.duration} ч. — ${b.price.toLocaleString('ru-RU')} ֏\n` +
-      `Статус: ${
-        b.status === 'pending' ? 'Ожидает подтверждения' :
-        b.status === 'approved' ? 'Подтверждена' : 'Отклонена'
-      }`
-    );
-
-    bot.sendMessage(chatId, details.join('\n\n'), menu());
-    return;
-  }
-
+  if (text === '🎮 Забронировать') return startBooking(chatId);
+  if (text === '💰 Посмотреть цены') return showPrices(chatId);
+  if (text === '👑 VIP-комнаты') return showVip(chatId);
+  if (text === '📅 Расписание') return showSchedule(chatId);
+  if (text === '📋 Мои заявки') return showMyBookings(chatId);
+  if (text === '🛠 Техподдержка') return showHelp(chatId);
   if (text === 'ℹ️ Информация') {
-    bot.sendMessage(
-      chatId,
-      'Aura Play 🎮\n' +
-      'Компьютеры: 1–5\n' +
-      'PS5 Pro — обычная зона: 1–2\n' +
-      'PS5 Pro — VIP-зона: 1–2\n\n' +
-      'День: 10:00–20:00\n' +
-      'Ночь: 20:00–10:00\n' +
-      'Бронирование — минимум за 2 часа.\n' +
-      'Заявка подтверждается администратором.',
+    return sendSection(chatId, 'home',
+      '<b>ℹ️ Информация Aura Play</b>\n\n' +
+      `${OPEN_TEXT}\n` +
+      'Компьютеры, PS5 Pro и две VIP-комнаты.\n\n' +
+      'Нажми «💰 Посмотреть цены», чтобы увидеть тарифы.',
       menu()
     );
-    return;
   }
 
+  const state = users.get(chatId);
   if (!state) return;
 
   if (state.step === 'date') {
-    if (!dateIsValid(text)) {
-      bot.sendMessage(chatId, 'Неверная дата. Введи её так: 2026-10-20');
-      return;
+    if (!validDate(text)) {
+      return bot.sendMessage(chatId, 'Неверный формат даты. Напиши ДД.ММ.ГГГГ.');
     }
-
     state.date = text;
-    askTime(chatId);
-    return;
+    return askTime(chatId);
   }
 
   if (state.step === 'time') {
-    if (!timeIsValid(text)) {
-      bot.sendMessage(chatId, 'Неверное время. Пример: 18:30');
-      return;
+    if (!validTime(text)) {
+      return bot.sendMessage(chatId, 'Неверное время. Напиши в формате ЧЧ:ММ.');
     }
-
-    const start = toArmeniaTimestamp(state.date, text);
-
-    if (start - Date.now() < 2 * HOUR) {
-      bot.sendMessage(
-        chatId,
-        'Бронирование нужно оформить минимум за 2 часа до начала. Выбери другое время.'
-      );
-      return;
-    }
-
     state.time = text;
-    showDurations(chatId);
-    return;
+    const start = toArmeniaTimestamp(state.date, state.time);
+    const leadHours = bookingLeadHours(start);
+    const now = Date.now();
+
+    if (start <= now) {
+      return bot.sendMessage(chatId, 'Это время уже прошло. Укажи будущую дату и время.');
+    }
+    if (start - now < leadHours * 60 * 60 * 1000) {
+      return bot.sendMessage(chatId,
+        `Для выбранного времени нужно оформить бронь минимум за ${leadHours} часа. Попробуй выбрать более позднее время.`);
+    }
+    return showDurations(chatId);
   }
 
   if (state.step === 'phone') {
-    const digits = text.replace(/\D/g, '');
-
-    if (digits.length < 7 || digits.length > 15) {
-      bot.sendMessage(
-        chatId,
-        'Проверь номер телефона и отправь его ещё раз.'
-      );
-      return;
+    const phone = text.replace(/[^\d+]/g, '');
+    if (!/^\+?\d{7,15}$/.test(phone)) {
+      return bot.sendMessage(chatId, 'Проверь номер телефона и отправь его ещё раз.');
     }
-
-    const asset = getAsset(state.assetId);
+    state.phone = phone;
     const start = toArmeniaTimestamp(state.date, state.time);
-    const end = start + state.duration * HOUR;
+    const end = start + state.duration * 60 * 60 * 1000;
+    const leadHours = bookingLeadHours(start);
 
-    if (start - Date.now() < 2 * HOUR) {
-      bot.sendMessage(
-        chatId,
-        'До начала осталось меньше 2 часов. Начни бронирование заново.',
-        menu()
-      );
+    if (start - Date.now() < leadHours * 60 * 60 * 1000) {
       users.delete(chatId);
-      return;
+      return bot.sendMessage(chatId,
+        `Не удалось оформить бронь: нужно минимум ${leadHours} часа до начала. Начни заново и выбери другое время.`);
     }
 
     if (!isAvailable(state.assetId, start, end)) {
-      bot.sendMessage(
-        chatId,
-        'Это место уже занято на выбранное время. Начни заново и выбери другое место.',
-        menu()
-      );
       users.delete(chatId);
-      return;
+      return bot.sendMessage(chatId,
+        'К сожалению, это место уже занято на выбранное время. Попробуй оформить новую заявку.');
     }
-
-    const price = calculatePrice(state.category, start, state.duration);
 
     const booking = {
       id: nextBookingId++,
-      userId: chatId,
-      username: msg.from.username ? `@${msg.from.username}` : 'не указан',
-      assetId: state.assetId,
-      assetName: asset.name,
+      chatId,
+      username: msg.from.username ? `@${msg.from.username}` : (msg.from.first_name || 'Клиент'),
       category: state.category,
+      assetId: state.assetId,
       date: state.date,
       time: state.time,
+      duration: state.duration,
       start,
       end,
-      duration: state.duration,
-      phone: text,
-      price,
+      phone,
+      price: calculatePrice(state.category, start, state.duration),
       status: 'pending'
     };
-
     bookings.push(booking);
     users.delete(chatId);
 
-    bot.sendMessage(
-      chatId,
-      `Заявка №${booking.id} отправлена администратору! ✅\n\n` +
-      `${booking.assetName}\n` +
-      `Дата: ${formatDate(booking.date)}\n` +
-      `Начало: ${booking.time}\n` +
+    await bot.sendMessage(chatId,
+      `✅ <b>Заявка №${booking.id} создана!</b>\n\n` +
+      `Место: ${findAsset(booking.assetId).name}\n` +
+      `Начало: ${formatDate(start)}\n` +
+      `Окончание: ${formatDate(end)}\n` +
       `Длительность: ${booking.duration} ч.\n` +
-      `Телефон: ${booking.phone}\n` +
-      `Итого: ${booking.price.toLocaleString('ru-RU')} ֏\n\n` +
-      'Ожидай подтверждения.',
-      menu()
+      `Цена: ${booking.price.toLocaleString('ru-RU')} драм\n` +
+      'Статус: ⏳ ожидает подтверждения администратора.',
+      { parse_mode: 'HTML', ...menu() }
     );
 
-    bot.sendMessage(
-      ADMIN_ID,
-      `🎮 Новая заявка №${booking.id}\n\n` +
-      `Место: ${booking.assetName}\n` +
+    const adminText =
+      `<b>🔔 НОВАЯ ЗАЯВКА №${booking.id}</b>\n\n` +
       `Клиент: ${booking.username}\n` +
-      `Telegram ID: ${booking.userId}\n` +
       `Телефон: ${booking.phone}\n` +
-      `Дата: ${formatDate(booking.date)}\n` +
-      `Начало: ${booking.time}\n` +
-      `Длительность: ${booking.duration} ч.\n` +
-      `Стоимость: ${booking.price.toLocaleString('ru-RU')} ֏`,
-      {
+      `Место: ${findAsset(booking.assetId).name}\n` +
+      `Начало: ${formatDate(start)}\n` +
+      `Окончание: ${formatDate(end)}\n` +
+      `Цена: ${booking.price.toLocaleString('ru-RU')} драм`;
+
+    try {
+      await bot.sendMessage(ADMIN_ID, adminText, {
+        parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [[
             { text: '✅ Подтвердить', callback_data: `approve:${booking.id}` },
             { text: '❌ Отклонить', callback_data: `reject:${booking.id}` }
           ]]
         }
-      }
-    ).catch(err => console.error('Ошибка отправки администратору:', err));
-
-    return;
+      });
+    } catch (e) {
+      console.error('Не удалось уведомить администратора:', e.message);
+    }
   }
 });
 
@@ -378,120 +425,66 @@ bot.on('callback_query', async query => {
   const data = query.data || '';
   const state = users.get(chatId);
 
-  if (data.startsWith('cat:')) {
-    if (!state || state.step !== 'category') {
+  try {
+    if (data.startsWith('cat:')) {
+      if (!state) return;
+      const category = data.slice(4);
+      if (!assets[category]) return;
+      state.category = category;
+      const keyboard = assets[category].map(asset => [{
+        text: asset.name,
+        callback_data: `asset:${asset.id}`
+      }]);
+      await bot.editMessageText('Выбери конкретное место:', {
+        chat_id: chatId,
+        message_id: query.message.message_id,
+        reply_markup: { inline_keyboard: keyboard }
+      });
+    } else if (data.startsWith('asset:')) {
+      if (!state) return;
+      const assetId = data.slice(6);
+      const asset = findAsset(assetId);
+      if (!asset || !assets[state.category].some(a => a.id === assetId)) return;
+      state.assetId = assetId;
       await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const category = data.slice(4);
-    if (!assets[category]) {
+      await askDate(chatId);
+    } else if (data.startsWith('duration:')) {
+      if (!state) return;
+      const duration = Number(data.slice(9));
+      if (!Number.isInteger(duration) || duration < 1 || duration > 12) return;
+      state.duration = duration;
       await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    state.category = category;
-    state.step = 'asset';
-
-    await bot.editMessageText('Выбери конкретное место:', {
-      chat_id: chatId,
-      message_id: query.message.message_id,
-      reply_markup: {
-        inline_keyboard: assets[category].map(a => [{
-          text: a.name,
-          callback_data: `asset:${a.id}`
-        }])
+      await askPhone(chatId);
+    } else if (data.startsWith('approve:') || data.startsWith('reject:')) {
+      if (String(query.from.id) !== ADMIN_ID) {
+        await bot.answerCallbackQuery(query.id, { text: 'Только администратор может это сделать.' });
+        return;
       }
-    });
+      const [action, idText] = data.split(':');
+      const booking = bookings.find(b => b.id === Number(idText));
+      if (!booking || booking.status !== 'pending') {
+        await bot.answerCallbackQuery(query.id, { text: 'Заявка уже обработана или не найдена.' });
+        return;
+      }
 
-    await bot.answerCallbackQuery(query.id);
-    return;
-  }
+      booking.status = action === 'approve' ? 'approved' : 'rejected';
+      await bot.answerCallbackQuery(query.id, { text: 'Готово!' });
 
-  if (data.startsWith('asset:')) {
-    if (!state || state.step !== 'asset') {
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
+      const statusText = action === 'approve'
+        ? '✅ Твоя бронь подтверждена! Ждём тебя в Aura Play.'
+        : '❌ К сожалению, администратор отклонил бронь. Свяжись с техподдержкой для уточнения.';
 
-    const assetId = data.slice(6);
-    const asset = getAsset(assetId);
-
-    if (!asset || !assets[state.category].some(a => a.id === assetId)) {
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    state.assetId = assetId;
-    await bot.answerCallbackQuery(query.id);
-    await askDate(chatId);
-    return;
-  }
-
-  if (data.startsWith('duration:')) {
-    if (!state || state.step !== 'duration') {
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    const duration = Number(data.slice(9));
-    if (!Number.isInteger(duration) || duration < 1 || duration > 12) {
-      await bot.answerCallbackQuery(query.id);
-      return;
-    }
-
-    state.duration = duration;
-    await bot.answerCallbackQuery(query.id);
-    await askPhone(chatId);
-    return;
-  }
-
-  if (data.startsWith('approve:') || data.startsWith('reject:')) {
-    if (String(query.from.id) !== ADMIN_ID) {
-      await bot.answerCallbackQuery(query.id, {
-        text: 'Эта кнопка доступна только администратору.',
-        show_alert: true
-      });
-      return;
-    }
-
-    const [action, idText] = data.split(':');
-    const booking = bookings.find(b => b.id === Number(idText));
-
-    if (!booking || booking.status !== 'pending') {
-      await bot.answerCallbackQuery(query.id, {
-        text: 'Заявка уже обработана или не найдена.'
-      });
-      return;
-    }
-
-    if (action === 'approve') {
-      booking.status = 'approved';
-
-      await bot.sendMessage(
-        booking.userId,
-        `✅ Заявка №${booking.id} подтверждена!\n` +
-        `${booking.assetName}\n` +
-        `${formatDate(booking.date)} в ${booking.time}`
-      );
-    } else {
-      booking.status = 'rejected';
-
-      await bot.sendMessage(
-        booking.userId,
-        `❌ Заявка №${booking.id} отклонена. Свяжись с Aura Play для уточнения.`
-      );
-    }
-
-    await bot.editMessageReplyMarkup(
-      { inline_keyboard: [] },
-      {
-        chat_id: query.message.chat.id,
+      await bot.sendMessage(booking.chatId, statusText);
+      await bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
+        chat_id: chatId,
         message_id: query.message.message_id
-      }
-    );
-
-    await bot.answerCallbackQuery(query.id, { text: 'Готово!' });
+      });
+    }
+  } catch (e) {
+    console.error('Ошибка обработки кнопки:', e.message);
+    try {
+      await bot.answerCallbackQuery(query.id);
+    } catch (_) {}
   }
 });
 
@@ -499,4 +492,4 @@ bot.on('polling_error', error => {
   console.error('Ошибка Telegram:', error.message);
 });
 
-console
+console.log('Aura Play Booking запущен.');
