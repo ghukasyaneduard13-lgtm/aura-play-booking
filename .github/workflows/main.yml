@@ -1,0 +1,26 @@
+name: Проверка Aura Play Booking
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Получить код
+        uses: actions/checkout@v4
+
+      - name: Установить Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Установить библиотеки
+        run: npm install
+
+      - name: Проверить код бота
+        run: node --check bot.js
