@@ -1051,7 +1051,38 @@ bot.on('message', async msg => {
         status: 'pending'
       };
 
-      bookings.push(booking);
+      
+const bookingDate = state.date.split('.').reverse().join('-');
+
+const { data: savedBooking, error: saveError } = await supabase
+  .from('bookings')
+  .insert({
+    telegram_id: chatId,
+    asset_name: state.assetId,
+    booking_date: bookingDate,
+    start_time: state.time,
+    duration: state.duration,
+    status: 'pending',
+    phone: booking.phone,
+    customer_name: booking.username,
+    comment: JSON.stringify(booking)
+  })
+  .select('id')
+  .single();
+
+if (saveError) {
+  console.error('Ошибка сохранения:', saveError.message);
+  await bot.sendMessage(
+    chatId,
+    'Не удалось сохранить заявку. Попробуй позже.'
+  );
+  return;
+}
+
+booking.id = Number(savedBooking.id);
+bookings.push(booking);
+nextBookingId = Math.max(nextBookingId, booking.id + 1);
+
       state.step = 'menu';
 
       await bot.sendMessage(
