@@ -170,6 +170,38 @@ function findAsset(id) {
   return Object.values(assets).flat().find(a => a.id === id);
 }
 
+// Вычисляет ближайшую подходящую дату без ручного выбора года
+function getNextBookingDate(day, month) {
+  const now = new Date(Date.now() + 4 * 60 * 60 * 1000);
+  const currentYear = now.getUTCFullYear();
+
+  const today = Date.UTC(
+    currentYear,
+    now.getUTCMonth(),
+    now.getUTCDate()
+  );
+
+  for (let year = currentYear; year <= currentYear + 8; year++) {
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+
+    // Проверка, что дата действительно существует
+    if (
+      candidate.getUTCFullYear() !== year ||
+      candidate.getUTCMonth() !== month - 1 ||
+      candidate.getUTCDate() !== day
+    ) {
+      continue;
+    }
+
+    // Сегодня и будущие дни разрешены
+    if (candidate.getTime() >= today) {
+      return `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}.${year}`;
+    }
+  }
+
+  return null;
+}
+
 function priceText() {
   return [
     '<b>💰 ЦЕНЫ AURA PLAY</b>',
@@ -251,13 +283,61 @@ function startBooking(chatId) {
   });
 }
 
+// Шаг 1: выбор дня
 function askDate(chatId) {
-  users.set(chatId, { ...users.get(chatId), step: 'date' });
+  const state = users.get(chatId);
+  if (!state) return;
 
-  return bot.sendMessage(
-    chatId,
-    '📅 Напиши дату бронирования в формате ДД.ММ.ГГГГ.\nНапример: 25.10.2026'
-  );
+  state.step = 'date_day';
+  delete state.day;
+  delete state.month;
+
+  const rows = [];
+
+  for (let i = 1; i <= 31; i += 7) {
+    rows.push(
+      Array.from(
+        { length: Math.min(7, 32 - i) },
+        (_, index) => i + index
+      ).map(day => ({
+        text: String(day),
+        callback_data: `date_day:${day}`
+      }))
+    );
+  }
+
+  return bot.sendMessage(chatId, '📅 Выбери день бронирования:', {
+    reply_markup: { inline_keyboard: rows }
+  });
+}
+
+// Шаг 2: выбор месяца
+function askMonth(chatId) {
+  const state = users.get(chatId);
+  if (!state) return;
+
+  state.step = 'date_month';
+
+  const months = [
+    'Январь', 'Февраль', 'Март', 'Апрель',
+    'Май', 'Июнь', 'Июль', 'Август',
+    'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'
+  ];
+
+  const rows = [];
+
+  for (let i = 0; i < 12; i += 3) {
+    rows.push(
+      months.slice(i, i + 3).map((name, index) => ({
+        text: name,
+        callback_data: `date_month:${i + index + 1}`
+      }))
+    );
+  }
+
+  return bot.sendMessage(chatId, '🗓️ Теперь выбери месяц:', {
+    reply_markup: { inline_keyboard: rows }
+  });
 }
 
 function askTime(chatId) {
@@ -382,18 +462,7 @@ bot.on('message', async msg => {
   const state = users.get(chatId);
   if (!state) return;
 
-  if (state.step === 'date') {
-    if (!validDate(text)) {
-      return bot.sendMessage(
-        chatId,
-        'Неверный формат даты. Напиши ДД.ММ.ГГГГ.'
-      );
-    }
-
-    state.date = text;
-    return askTime(chatId);
-  }
-
+  // Ввод времени
   if (state.step === 'time') {
     if (!validTime(text)) {
       return bot.sendMessage(
@@ -425,6 +494,7 @@ bot.on('message', async msg => {
     return showDurations(chatId);
   }
 
+  // Ввод телефона
   if (state.step === 'phone') {
     const phone = text.replace(/[^\d+]/g, '');
 
@@ -518,10 +588,7 @@ bot.on('message', async msg => {
         }
       });
     } catch (e) {
-      console.error(
-        'Не удалось уведомить администратора:',
-        e.message
-      );
+      console.error('Не удалось уведомить администратора:', e.message);
     }
   }
 });
@@ -532,6 +599,7 @@ bot.on('callback_query', async query => {
   const state = users.get(chatId);
 
   try {
+    // Выбор категории
     if (data.startsWith('cat:')) {
       if (!state) {
         await bot.answerCallbackQuery(query.id);
@@ -539,6 +607,7 @@ bot.on('callback_query', async query => {
       }
 
       const category = data.slice(4);
+
       if (!assets[category]) {
         await bot.answerCallbackQuery(query.id);
         return;
@@ -558,7 +627,10 @@ bot.on('callback_query', async query => {
         message_id: query.message.message_id,
         reply_markup: { inline_keyboard: keyboard }
       });
-    } else if (data.startsWith('asset:')) {
+    }
+
+    // Выбор места
+    else if (data.startsWith('asset:')) {
       if (!state) {
         await bot.answerCallbackQuery(query.id);
         return;
@@ -576,7 +648,80 @@ bot.on('callback_query', async query => {
 
       await bot.answerCallbackQuery(query.id);
       await askDate(chatId);
-    } else if (data.startsWith('duration:')) {
+    }
+
+    // Выбор дня
+    else if (data.startsWith('date_day:')) {
+      if (!state || state.step !== 'date_day') {
+        await bot.answerCallbackQuery(query.id);
+        return;
+      }
+
+      const day = Number(data.slice(9));
+
+      if (!Number.isInteger(day) || day < 1 || day > 31) {
+        await bot.answerCallbackQuery(query.id, {
+          text: 'Выбери день от 1 до 31.'
+        });
+        return;
+      }
+
+      state.day = day;
+
+      await bot.answerCallbackQuery(query.id);
+      await askMonth(chatId);
+    }
+
+    // Выбор месяца и автоматический год
+    else if (data.startsWith('date_month:')) {
+      if (!state || state.step !== 'date_month' || !state.day) {
+        await bot.answerCallbackQuery(query.id);
+        return;
+      }
+
+      const month = Number(data.slice(11));
+
+      if (!Number.isInteger(month) || month < 1 || month > 12) {
+        await bot.answerCallbackQuery(query.id, {
+          text: 'Выбери месяц.'
+        });
+        return;
+      }
+
+      state.month = month;
+
+      const selectedDate = getNextBookingDate(state.day, month);
+
+      if (!selectedDate) {
+        await bot.answerCallbackQuery(query.id, {
+          text: 'Такой даты не существует. Выбери другой день.'
+        });
+
+        await bot.sendMessage(
+          chatId,
+          '❌ В этом месяце нет такого дня. Выбери день заново.'
+        );
+
+        await askDate(chatId);
+        return;
+      }
+
+      state.date = selectedDate;
+
+      await bot.answerCallbackQuery(query.id, {
+        text: `Дата выбрана: ${selectedDate}`
+      });
+
+      await bot.sendMessage(
+        chatId,
+        `✅ Дата бронирования: ${selectedDate}`
+      );
+
+      await askTime(chatId);
+    }
+
+    // Выбор длительности
+    else if (data.startsWith('duration:')) {
       if (!state) {
         await bot.answerCallbackQuery(query.id);
         return;
@@ -593,7 +738,10 @@ bot.on('callback_query', async query => {
 
       await bot.answerCallbackQuery(query.id);
       await askPhone(chatId);
-    } else if (
+    }
+
+    // Подтверждение или отклонение администратором
+    else if (
       data.startsWith('approve:') ||
       data.startsWith('reject:')
     ) {
