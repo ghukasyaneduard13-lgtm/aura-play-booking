@@ -1,6 +1,10 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
-
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
 // ========== RENDER ==========
 const PORT = process.env.PORT || 3000;
 
