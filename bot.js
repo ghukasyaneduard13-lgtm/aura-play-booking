@@ -1300,4 +1300,5 @@ bot.on('polling_error', error => {
   console.error('Ошибка Telegram:', error.message);
 });
 
+loadBookings();
 console.log('Aura Play Booking запущен.');
