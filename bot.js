@@ -2,7 +2,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 
-// HTTP-сервер для Render Web Service
+// HTTP-сервер для Render
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
@@ -157,20 +157,51 @@ function bookingLeadHours(startTimestamp) {
   return hour >= 5 && hour < 10 ? 5 : 2;
 }
 
-function isAvailable(assetId, start, end) {
-  return !bookings.some(b =>
-    b.assetId === assetId &&
-    ['pending', 'approved'].includes(b.status) &&
-    start < b.end &&
-    end > b.start
-  );
-}
-
 function findAsset(id) {
   return Object.values(assets).flat().find(a => a.id === id);
 }
 
-// Вычисляет ближайшую подходящую дату без ручного выбора года
+// Проверка занятости и поиск времени освобождения
+function getBookingConflict(assetId, start, end) {
+  const activeBookings = bookings.filter(b =>
+    b.assetId === assetId &&
+    ['pending', 'approved'].includes(b.status)
+  );
+
+  const conflicts = activeBookings.filter(b =>
+    start < b.end && end > b.start
+  );
+
+  if (conflicts.length === 0) return null;
+
+  let occupiedUntil = Math.max(...conflicts.map(b => b.end));
+
+  // Учитываем следующие брони, если они идут подряд без свободного промежутка
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    for (const b of activeBookings) {
+      if (
+        b.start < occupiedUntil &&
+        b.end > start &&
+        b.end > occupiedUntil
+      ) {
+        occupiedUntil = b.end;
+        changed = true;
+      }
+    }
+  }
+
+  return { occupiedUntil };
+}
+
+function isAvailable(assetId, start, end) {
+  return getBookingConflict(assetId, start, end) === null;
+}
+
+// Автоматический выбор ближайшего подходящего года
 function getNextBookingDate(day, month) {
   const now = new Date(Date.now() + 4 * 60 * 60 * 1000);
   const currentYear = now.getUTCFullYear();
@@ -184,7 +215,6 @@ function getNextBookingDate(day, month) {
   for (let year = currentYear; year <= currentYear + 8; year++) {
     const candidate = new Date(Date.UTC(year, month - 1, day));
 
-    // Проверка, что дата действительно существует
     if (
       candidate.getUTCFullYear() !== year ||
       candidate.getUTCMonth() !== month - 1 ||
@@ -193,7 +223,6 @@ function getNextBookingDate(day, month) {
       continue;
     }
 
-    // Сегодня и будущие дни разрешены
     if (candidate.getTime() >= today) {
       return `${String(day).padStart(2, '0')}.${String(month).padStart(2, '0')}.${year}`;
     }
@@ -283,7 +312,7 @@ function startBooking(chatId) {
   });
 }
 
-// Шаг 1: выбор дня
+// Выбор дня
 function askDate(chatId) {
   const state = users.get(chatId);
   if (!state) return;
@@ -311,7 +340,7 @@ function askDate(chatId) {
   });
 }
 
-// Шаг 2: выбор месяца
+// Выбор месяца
 function askMonth(chatId) {
   const state = users.get(chatId);
   if (!state) return;
@@ -494,7 +523,7 @@ bot.on('message', async msg => {
     return showDurations(chatId);
   }
 
-  // Ввод телефона
+  // Ввод телефона и создание заявки
   if (state.step === 'phone') {
     const phone = text.replace(/[^\d+]/g, '');
 
@@ -516,16 +545,27 @@ bot.on('message', async msg => {
 
       return bot.sendMessage(
         chatId,
-        `Не удалось оформить бронь: нужно минимум ${leadHours} часа до начала. Начни заново и выбери другое время.`
+        `Не удалось оформить бронь: нужно минимум ${leadHours} часа до начала. Начни заново и выбери другое время.`,
+        menu()
       );
     }
 
-    if (!isAvailable(state.assetId, start, end)) {
+    // Проверяем место непосредственно перед созданием заявки
+    const conflict = getBookingConflict(state.assetId, start, end);
+
+    if (conflict) {
+      const asset = findAsset(state.assetId);
+      const occupiedUntil = formatDate(conflict.occupiedUntil);
+
       users.delete(chatId);
 
       return bot.sendMessage(
         chatId,
-        'К сожалению, это место уже занято на выбранное время. Попробуй оформить новую заявку.'
+        `⚠️ <b>Это место уже занято!</b>\n\n` +
+          `🎮 Место: ${asset ? asset.name : state.assetId}\n` +
+          `🕒 Занято до: ${occupiedUntil}\n\n` +
+          'Попробуй выбрать другое место или время после освобождения.',
+        { parse_mode: 'HTML', ...menu() }
       );
     }
 
@@ -629,7 +669,7 @@ bot.on('callback_query', async query => {
       });
     }
 
-    // Выбор места
+    // Выбор конкретного места
     else if (data.startsWith('asset:')) {
       if (!state) {
         await bot.answerCallbackQuery(query.id);
@@ -639,7 +679,7 @@ bot.on('callback_query', async query => {
       const assetId = data.slice(6);
       const asset = findAsset(assetId);
 
-      if (!asset || !assets[state.category].some(a => a.id === assetId)) {
+      if (!asset || !assets[state.category]?.some(a => a.id === assetId)) {
         await bot.answerCallbackQuery(query.id);
         return;
       }
@@ -672,7 +712,7 @@ bot.on('callback_query', async query => {
       await askMonth(chatId);
     }
 
-    // Выбор месяца и автоматический год
+    // Выбор месяца; год подставляется автоматически
     else if (data.startsWith('date_month:')) {
       if (!state || state.step !== 'date_month' || !state.day) {
         await bot.answerCallbackQuery(query.id);
@@ -688,13 +728,11 @@ bot.on('callback_query', async query => {
         return;
       }
 
-      state.month = month;
-
       const selectedDate = getNextBookingDate(state.day, month);
 
       if (!selectedDate) {
         await bot.answerCallbackQuery(query.id, {
-          text: 'Такой даты не существует. Выбери другой день.'
+          text: 'Такой даты не существует.'
         });
 
         await bot.sendMessage(
@@ -706,6 +744,7 @@ bot.on('callback_query', async query => {
         return;
       }
 
+      state.month = month;
       state.date = selectedDate;
 
       await bot.answerCallbackQuery(query.id, {
@@ -760,6 +799,31 @@ bot.on('callback_query', async query => {
           text: 'Заявка уже обработана или не найдена.'
         });
         return;
+      }
+
+      // Перед подтверждением повторно проверяем, не занял ли место кто-то другой
+      if (action === 'approve') {
+        const conflict = bookings.find(b =>
+          b.id !== booking.id &&
+          b.assetId === booking.assetId &&
+          ['pending', 'approved'].includes(b.status) &&
+          booking.start < b.end &&
+          booking.end > b.start
+        );
+
+        if (conflict) {
+          await bot.answerCallbackQuery(query.id, {
+            text: 'Есть пересекающаяся заявка. Проверь расписание.'
+          });
+
+          await bot.sendMessage(
+            ADMIN_ID,
+            `⚠️ Нельзя подтвердить заявку №${booking.id}: ` +
+              `место пересекается с заявкой №${conflict.id}, ` +
+              `занято до ${formatDate(conflict.end)}.`
+          );
+          return;
+        }
       }
 
       booking.status = action === 'approve' ? 'approved' : 'rejected';
