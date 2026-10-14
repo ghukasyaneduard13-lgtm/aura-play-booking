@@ -1,23 +1,31 @@
+
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const { createClient } = require('@supabase/supabase-js');
 
 // ================= НАСТРОЙКИ =================
 
-const TOKEN = process.env.BOT_TOKEN;
-const ADMIN_ID = String(process.env.ADMIN_ID || '');
+const TOKEN = (process.env.BOT_TOKEN || '').trim();
+const ADMIN_ID = String(process.env.ADMIN_ID || '').trim();
+const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
+const SUPABASE_KEY = (process.env.SUPABASE_KEY || '').trim();
 const PORT = process.env.PORT || 3000;
 
-if (!TOKEN || !ADMIN_ID || !process.env.SUPABASE_URL ||
-    !process.env.SUPABASE_KEY) {
-  throw new Error('Проверь переменные окружения в Render.');
+const missingVariables = [];
+if (!TOKEN) missingVariables.push('BOT_TOKEN');
+if (!ADMIN_ID) missingVariables.push('ADMIN_ID');
+if (!SUPABASE_URL) missingVariables.push('SUPABASE_URL');
+if (!SUPABASE_KEY) missingVariables.push('SUPABASE_KEY');
+
+if (missingVariables.length) {
+  throw new Error(
+    'В Railway не найдены или пустые переменные: ' +
+    missingVariables.join(', ') +
+    '. Проверь Variables этого сервиса и сделай Redeploy.'
+  );
 }
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_KEY
-);
-
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 http.createServer((req, res) => {
