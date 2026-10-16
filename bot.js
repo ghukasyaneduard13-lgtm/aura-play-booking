@@ -1,4 +1,3 @@
-
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const { createClient } = require('@supabase/supabase-js');
@@ -7,9 +6,12 @@ const { createClient } = require('@supabase/supabase-js');
 
 const TOKEN = (process.env.BOT_TOKEN || '').trim();
 const ADMIN_ID = String(process.env.ADMIN_ID || '').trim();
+const ADMIN_ID_2 = String(process.env.ADMIN_ID_2 || '').trim();
+const ADMIN_IDS = [...new Set([ADMIN_ID, ADMIN_ID_2].filter(Boolean))];
 const SUPABASE_URL = (process.env.SUPABASE_URL || '').trim();
 const SUPABASE_KEY = (process.env.SUPABASE_KEY || '').trim();
 const PORT = process.env.PORT || 3000;
+const MIN_BOOKING_LEAD_MS = 2 * 60 * 60 * 1000;
 
 const missingVariables = [];
 if (!TOKEN) missingVariables.push('BOT_TOKEN');
@@ -546,7 +548,7 @@ async function showScheduleForAsset(id) {
   const s = state(id);
   const asset = findAsset(s.assetId);
 
-  const dayStart = timestamp(s.date, '10:00');
+  const dayStart = timestamp(s.date, '05:00');
   const [d, m, y] = s.date.split('.').map(Number);
   const nextDay = new Date(Date.UTC(y, m - 1, d) + 86400000);
   const nextDate =
@@ -721,8 +723,8 @@ bot.on('message', async msg => {
       s.time = text;
       const start = timestamp(s.date, s.time);
 
-      if (start <= Date.now()) {
-        return send(id, '❌ Это время уже прошло. Выбери другое.');
+      if (start < Date.now() + MIN_BOOKING_LEAD_MS) {
+        return send(id, '❌ Бронирование нужно оформлять минимум за 2 часа. Выбери другое время.');
       }
 
       return askDuration(id);
@@ -740,8 +742,8 @@ bot.on('message', async msg => {
       const start = timestamp(s.date, s.time);
       const end = start + s.duration * 3600000;
 
-      if (start <= Date.now()) {
-        return send(id, '❌ Это время уже прошло. Выбери другое.');
+      if (start < Date.now() + MIN_BOOKING_LEAD_MS) {
+        return send(id, '❌ Бронирование нужно оформлять минимум за 2 часа. Выбери другое время.');
       }
 
       const existing = conflict(s.assetId, start, end);
@@ -805,15 +807,17 @@ bot.on('message', async msg => {
         { parse_mode: 'HTML' }
       );
 
-      await bot.sendMessage(ADMIN_ID,
+      const adminMessage =
         `<b>🔔 НОВАЯ ЗАЯВКА №${booking.id}</b>\n\n` +
         `Клиент: ${booking.username}\n` +
         `Телефон: ${booking.phone}\n` +
         `Место: ${asset.name}\n` +
         `Начало: ${dateTime(start)}\n` +
         `Окончание: ${dateTime(end)}\n` +
-        `Цена: ${booking.price.toLocaleString('ru-RU')} драм`,
-        {
+        `Цена: ${booking.price.toLocaleString('ru-RU')} драм`;
+
+      await Promise.all(ADMIN_IDS.map(adminId =>
+        bot.sendMessage(adminId, adminMessage, {
           parse_mode: 'HTML',
           reply_markup: {
             inline_keyboard: [[
@@ -821,8 +825,10 @@ bot.on('message', async msg => {
               { text: '❌ Отклонить', callback_data: `reject:${booking.id}` }
             ]]
           }
-        }
-      ).catch(e => console.error('Ошибка отправки администратору:', e.message));
+        }).catch(e => console.error(
+          `Ошибка отправки администратору ${adminId}:`, e.message
+        ))
+      ));
     }
   } catch (e) {
     console.error('Ошибка обработки сообщения:', e);
@@ -898,8 +904,8 @@ bot.on('callback_query', async query => {
       const start = timestamp(s.date, s.time);
       const end = start + duration * 3600000;
 
-      if (start <= Date.now()) {
-        await send(id, '❌ Это время уже прошло. Выбери другое.');
+      if (start < Date.now() + MIN_BOOKING_LEAD_MS) {
+        await send(id, '❌ Бронирование нужно оформлять минимум за 2 часа. Выбери другое время.');
         return askTime(id);
       }
 
@@ -914,7 +920,7 @@ bot.on('callback_query', async query => {
     }
 
     if (data.startsWith('approve:') || data.startsWith('reject:')) {
-      if (String(query.from.id) !== ADMIN_ID) {
+      if (!ADMIN_IDS.includes(String(query.from.id))) {
         return bot.answerCallbackQuery(query.id, {
           text: 'Только администратор может это сделать.'
         });
@@ -924,7 +930,7 @@ bot.on('callback_query', async query => {
       const booking = bookings.find(b => b.id === Number(idText));
 
       if (!booking || booking.status !== 'pending') {
-        return send(ADMIN_ID, 'Заявка уже обработана или не найдена.');
+        return send(id, 'Заявка уже обработана или не найдена.');
       }
 
       if (action === 'approve') {
@@ -964,10 +970,12 @@ bot.on('callback_query', async query => {
   } catch (e) {
     console.error('Ошибка обработки кнопки:', e);
     if (data.startsWith('approve:') || data.startsWith('reject:')) {
-      await bot.sendMessage(
-        ADMIN_ID,
-        'Не удалось обработать заявку. Проверь подключение к Supabase.'
-      ).catch(() => {});
+      await Promise.all(ADMIN_IDS.map(adminId =>
+        bot.sendMessage(
+          adminId,
+          'Не удалось обработать заявку. Проверь подключение к Supabase.'
+        ).catch(() => {})
+      ));
     }
   }
 });
