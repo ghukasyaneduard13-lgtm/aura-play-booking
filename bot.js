@@ -1,4 +1,3 @@
-
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const { createClient } = require('@supabase/supabase-js');
@@ -98,395 +97,267 @@ const HY = {
   '❌ Введи время в формате ЧЧ:ММ, например 18:00.': '❌ Մուտքագրեք ժամը, օրինակ՝ 18:00։',
   '❌ Проверь номер телефона и введи ещё раз.': '❌ Ստուգեք հեռախոսահամարը և կրկին մուտքագրեք։',
   '📋 У тебя пока нет заявок.': '📋 Դուք դեռ հայտեր չունեք։',
-  '🔴 ЗАНЯТО': '🔴 ԶԲԱՂՎԱԾ Է',
-  '🟢 СВОБОДНО': '🟢 ԱԶԱՏ Է',
-  'Пока нет заявок на эту дату.': 'Այս ամսաթվի համար հայտեր դեռ չկան։',
-  'Нет свободных промежутков.': 'Ազատ ժամեր չկան։',
-  'Начало:': 'Սկիզբը՝',
-  'Окончание:': 'Ավարտը՝',
-  'Место:': 'Տեղը՝',
-  'Телефон:': 'Հեռախոս՝',
-  'Цена:': 'Գինը՝',
-  'Длительность:': 'Տևողությունը՝',
-  'Статус:': 'Կարգավիճակ՝',
-  'Клиент:': 'Հաճախորդ՝',
-  'драм': 'դրամ',
-  'часа': 'ժամ',
-  'Компьютер № 1': 'Համակարգիչ № 1',
-  'Компьютер № 2': 'Համակարգիչ № 2',
-  'Компьютер № 3': 'Համակարգիչ № 3',
-  'Компьютер № 4': 'Համակարգիչ № 4',
-  'Компьютер № 5': 'Համակարգիչ № 5',
-  'PS5 Pro — обычная зона № 1': 'PS5 Pro՝ սովորական գոտի № 1',
-  'PS5 Pro — обычная зона № 2': 'PS5 Pro՝ սովորական գոտի № 2',
-  'PS5 Pro — VIP-комната № 1': 'PS5 Pro՝ VIP սենյակ № 1',
-  'PS5 Pro — VIP-комната № 2': 'PS5 Pro՝ VIP սենյակ № 2',
-  'Январь': 'Հունվար',
-  'Февраль': 'Փետրվար',
-  'Март': 'Մարտ',
-  'Апрель': 'Ապրիլ',
-  'Май': 'Մայիս',
-  'Июнь': 'Հունիս',
-  'Июль': 'Հուլիս',
-  'Август': 'Օգոստոս',
-  'Сентябрь': 'Սեպտեմբեր',
-  'Октябрь': 'Հոկտեմբեր',
-  'Ноябрь': 'Նոյեմբեր',
-  'Декабрь': 'Դեկտեմբեր'
+  '🎮 Что хочешь забронировать?': '🎮 Ի՞նչ եք ցանկանում ամրագրել։',
+  '⏰ Напиши время начала, например 18:00.': '⏰ Գրեք մեկնարկի ժամը, օրինակ՝ 18:00։',
+  '❌ Начало бронирования возможно только с 10:00 до 23:59. Выбери другое время.': '❌ Ամրագրումը հնարավոր է միայն 10:00-ից մինչև 23:59։ Ընտրեք այլ ժամ։'
 };
 
 function state(id) {
   if (!users.has(id)) {
     users.set(id, {
-      lang: 'ru',
       step: 'menu',
-      category: null,
-      assetId: null,
-      date: null,
-      day: null,
-      month: null,
-      time: null,
-      duration: null,
-      phone: null
+      language: 'ru'
     });
   }
 
   return users.get(id);
 }
 
-function tr(id, text) {
-  if (state(id).lang !== 'hy') return text;
+function normalize(id, text) {
+  const s = state(id);
 
-  let out = String(text);
-
-  for (const [ru, hy] of Object.entries(HY)) {
-    out = out.split(ru).join(hy);
+  if (s.language === 'hy') {
+    for (const [ru, hy] of Object.entries(HY)) {
+      if (text === hy) return ru;
+    }
   }
 
-  out = out.replace(
-    /Ежедневно: 10:00–00:00/g,
-    'Ամեն օր՝ 10:00–00:00'
-  );
-
-  out = out.replace(/(\d+) ч\./g, '$1 ժ.');
-
-  return out;
+  return text;
 }
 
-function normalize(id, text) {
-  if (state(id).lang !== 'hy') return text;
+function translate(id, text) {
+  const s = state(id);
 
-  let out = text;
-
-  for (const [ru, hy] of Object.entries(HY)) {
-    out = out.split(hy).join(ru);
+  if (s.language === 'hy') {
+    return HY[text] || text;
   }
 
-  return out;
+  return text;
 }
 
 function send(id, text, options = {}) {
-  const opts = { ...options };
+  const s = state(id);
 
-  if (opts.reply_markup) {
-    opts.reply_markup = JSON.parse(
-      JSON.stringify(opts.reply_markup)
-    );
-
-    const walk = node => {
-      if (!node || typeof node !== 'object') return;
-
-      if (Array.isArray(node)) {
-        return node.forEach(walk);
-      }
-
-      for (const key of Object.keys(node)) {
-        if (key === 'text' && typeof node[key] === 'string') {
-          node[key] = tr(id, node[key]);
-        } else {
-          walk(node[key]);
-        }
-      }
-    };
-
-    walk(opts.reply_markup);
+  if (s.language === 'hy') {
+    for (const [ru, hy] of Object.entries(HY)) {
+      text = text.replaceAll(ru, hy);
+    }
   }
 
-  return bot.sendMessage(id, tr(id, text), opts);
+  return bot.sendMessage(id, text, options);
+}
+
+function inlineBack(destination = 'back') {
+  return {
+    inline_keyboard: [[
+      {
+        text: '⬅️ Назад',
+        callback_data: destination
+      }
+    ]]
+  };
+}
+
+function rowsWithBack(rows, destination = 'back') {
+  return {
+    inline_keyboard: [
+      ...rows,
+      [{
+        text: '⬅️ Назад',
+        callback_data: destination
+      }]
+    ]
+  };
+}
+
+function mainMenu(id) {
+  const s = state(id);
+
+  s.step = 'menu';
+
+  const keyboard = [
+    [{ text: '🎮 Забронировать' }],
+    [{ text: '💰 Посмотреть цены' }],
+    [{ text: '👑 VIP-комнаты' }],
+    [{ text: '📅 Расписание' }],
+    [{ text: '📋 Мои заявки' }],
+    [{ text: 'ℹ️ Информация' }],
+    [{ text: '🛠 Техподдержка' }]
+  ];
+
+  if (s.language === 'hy') {
+    for (const row of keyboard) {
+      for (const button of row) {
+        button.text = translate(id, button.text);
+      }
+    }
+  }
+
+  return bot.sendMessage(id, '🎮 <b>AURA PLAY</b>\n\nВыбери нужный раздел:', {
+    parse_mode: 'HTML',
+    reply_markup: {
+      keyboard,
+      resize_keyboard: true
+    }
+  });
 }
 
 // ================= ДАТА И ВРЕМЯ =================
 
-// Все даты и часы бронирования рассчитываются по времени Армении (UTC+4).
+function nowLocal() {
+  return new Date(Date.now() + TIMEZONE_OFFSET_MS);
+}
+
+function dateText(date) {
+  return date.toISOString().slice(0, 10);
+}
 
 function timestamp(date, time) {
-  const [d, m, y] = date.split('.').map(Number);
-  const [h, min] = time.split(':').map(Number);
-
-  return Date.UTC(y, m - 1, d, h, min) - TIMEZONE_OFFSET_MS;
+  return new Date(`${date}T${time}:00+04:00`).getTime();
 }
 
-function dateTime(ts) {
-  const d = new Date(ts + TIMEZONE_OFFSET_MS);
+function timeText(value) {
+  return new Date(value + TIMEZONE_OFFSET_MS)
+    .toISOString()
+    .slice(11, 16);
+}
+
+function dateTime(value) {
+  const d = new Date(value + TIMEZONE_OFFSET_MS);
 
   return (
-    `${String(d.getUTCDate()).padStart(2, '0')}.` +
-    `${String(d.getUTCMonth() + 1).padStart(2, '0')}.` +
-    `${d.getUTCFullYear()} ` +
-    `${String(d.getUTCHours()).padStart(2, '0')}:` +
-    `${String(d.getUTCMinutes()).padStart(2, '0')}`
+    d.toISOString().slice(8, 10) + '.' +
+    d.toISOString().slice(5, 7) + '.' +
+    d.toISOString().slice(0, 4) + ' ' +
+    d.toISOString().slice(11, 16)
   );
 }
 
-function timeText(ts) {
-  const d = new Date(ts + TIMEZONE_OFFSET_MS);
-
-  return (
-    `${String(d.getUTCHours()).padStart(2, '0')}:` +
-    `${String(d.getUTCMinutes()).padStart(2, '0')}`
-  );
-}
-
-function validTime(text) {
-  if (!/^\d{2}:\d{2}$/.test(text)) return false;
-
-  const [h, m] = text.split(':').map(Number);
-
-  return h >= 0 && h <= 23 && m >= 0 && m <= 59;
-}
-
-function validDate(text) {
-  if (!/^\d{2}\.\d{2}\.\d{4}$/.test(text)) return false;
-
-  const [d, m, y] = text.split('.').map(Number);
-  const date = new Date(Date.UTC(y, m - 1, d));
-
-  return (
-    date.getUTCFullYear() === y &&
-    date.getUTCMonth() === m - 1 &&
-    date.getUTCDate() === d
-  );
-}
-
-function nextCalendarDate(date) {
-  const [d, m, y] = date.split('.').map(Number);
-  const next = new Date(Date.UTC(y, m - 1, d) + 86400000);
-
-  return (
-    `${String(next.getUTCDate()).padStart(2, '0')}.` +
-    `${String(next.getUTCMonth() + 1).padStart(2, '0')}.` +
-    `${next.getUTCFullYear()}`
-  );
+function validTime(value) {
+  return /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 }
 
 function businessHours(date) {
-  return {
-    start: timestamp(date, '10:00'),
-    end: timestamp(date, '24:00')
-  };
+  const start = timestamp(date, '10:00');
+  const end = timestamp(date, '24:00');
+
+  return { start, end };
 }
 
-// Начало — не раньше 10:00.
-// Окончание — не позже 00:00 следующего календарного дня.
-// Бронирование через полночь запрещено.
 function validBookingWindow(date, start, end) {
-  if (!validDate(date)) return false;
-
   const hours = businessHours(date);
 
   return (
     start >= hours.start &&
-    start < hours.end &&
-    end > start &&
-    end <= hours.end
+    end <= hours.end &&
+    start < end
   );
 }
 
-function nextDate(day, month) {
-  const now = new Date(Date.now() + TIMEZONE_OFFSET_MS);
+function priceFor(assetId, start, end) {
+  const vip = assetId.startsWith('PSV');
+  const dayPrice = vip ? 1200 : 1000;
+  const nightPrice = vip ? 1400 : 1200;
 
-  for (
-    let year = now.getUTCFullYear();
-    year <= now.getUTCFullYear() + 2;
-    year++
-  ) {
-    const date =
-      `${String(day).padStart(2, '0')}.` +
-      `${String(month).padStart(2, '0')}.` +
-      `${year}`;
+  let total = 0;
+  let cursor = start;
 
-    if (!validDate(date)) continue;
+  while (cursor < end) {
+    const current = new Date(cursor + TIMEZONE_OFFSET_MS);
+    const hour = current.getUTCHours();
 
-    if (timestamp(date, '23:59') >= Date.now()) {
-      return date;
-    }
+    const nextHour = Math.min(
+      end,
+      cursor + (60 - current.getUTCMinutes()) * 60 * 1000
+    );
+
+    total += (
+      hour >= 10 && hour < 20
+        ? dayPrice
+        : nightPrice
+    ) * ((nextHour - cursor) / HOUR_MS);
+
+    cursor = nextHour;
+  }
+
+  return Math.round(total);
+}
+
+function findAsset(id) {
+  for (const group of Object.values(assets)) {
+    const found = group.find(a => a.id === id);
+
+    if (found) return found;
   }
 
   return null;
 }
 
-// ================= ЦЕНЫ =================
-
-// 10:00–20:00 — дневной тариф.
-// 20:00–00:00 — вечерний тариф.
-
-function priceRate(category, hour) {
-  const daytime = hour >= OPEN_HOUR && hour < DAY_RATE_END;
-
-  if (category === 'computer' || category === 'ps_normal') {
-    return daytime ? 1000 : 1200;
-  }
-
-  if (category === 'ps_vip') {
-    return daytime ? 1200 : 1400;
-  }
-
-  return 0;
-}
-
-function calculatePrice(category, start, duration) {
-  let total = 0;
-
-  for (let i = 0; i < duration; i++) {
-    const hour = new Date(
-      start + i * HOUR_MS + TIMEZONE_OFFSET_MS
-    ).getUTCHours();
-
-    total += priceRate(category, hour);
-  }
-
-  return total;
-}
-
-// ================= БРОНИРОВАНИЯ =================
-
-function findAsset(assetId) {
-  return Object.values(assets)
-    .flat()
-    .find(a => a.id === assetId);
-}
-
-function conflict(assetId, start, end, excludeId = null) {
-  return bookings.find(b =>
-    b.assetId === assetId &&
-    b.id !== excludeId &&
-    ['pending', 'approved'].includes(b.status) &&
-    start < b.end &&
-    end > b.start
-  ) || null;
-}
+// ================= SUPABASE =================
 
 async function loadBookings() {
   const { data, error } = await supabase
     .from('bookings')
-    .select('*');
+    .select('*')
+    .order('id', { ascending: true });
 
-  if (error) {
-    console.error(
-      'Ошибка загрузки бронирований:',
-      error.message
-    );
-    return;
-  }
+  if (error) throw error;
 
-  bookings = (data || []).map(row => {
-    let extra = {};
-
-    try {
-      extra = row.comment ? JSON.parse(row.comment) : {};
-    } catch (_) {}
-
-    const date = row.booking_date
-      ? row.booking_date.split('-').reverse().join('.')
-      : extra.date;
-
-    const time = row.start_time || extra.time;
-    const start = Number(extra.start) || timestamp(date, time);
-    const duration = Number(row.duration || extra.duration || 1);
-
-    return {
-      ...extra,
-      id: Number(row.id),
-      chatId: Number(row.telegram_id),
-      assetId: row.asset_name,
-      date,
-      time,
-      start,
-      end: start + duration * HOUR_MS,
-      duration,
-      phone: row.phone || extra.phone || '',
-      username: row.customer_name || extra.username || 'Клиент',
-      status: row.status || 'pending',
-      price: Number(extra.price || 0)
-    };
-  });
+  bookings = (data || []).map(row => ({
+    id: row.id,
+    chatId: String(row.telegram_id),
+    assetId: row.asset_id,
+    date: row.booking_date,
+    start: new Date(row.start_at).getTime(),
+    end: new Date(row.end_at).getTime(),
+    duration: row.duration,
+    phone: row.phone,
+    price: row.price,
+    status: row.status
+  }));
 
   console.log(`Загружено бронирований: ${bookings.length}`);
 }
 
-async function saveStatus(id, statusValue) {
+async function saveBooking(booking) {
+  const { data, error } = await supabase
+    .from('bookings')
+    .insert({
+      telegram_id: booking.chatId,
+      asset_id: booking.assetId,
+      booking_date: booking.date,
+      start_at: new Date(booking.start).toISOString(),
+      end_at: new Date(booking.end).toISOString(),
+      duration: booking.duration,
+      phone: booking.phone,
+      price: booking.price,
+      status: booking.status
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  booking.id = data.id;
+  bookings.push(booking);
+
+  return booking;
+}
+
+async function updateBookingStatus(id, status) {
   const { error } = await supabase
     .from('bookings')
-    .update({ status: statusValue })
+    .update({ status })
     .eq('id', id);
 
   if (error) throw error;
+
+  const booking = bookings.find(b => String(b.id) === String(id));
+
+  if (booking) booking.status = status;
 }
 
-// ================= ГЛАВНОЕ МЕНЮ =================
-
-function mainMenu(id) {
-  state(id).step = 'menu';
-
-  return send(
-    id,
-    '<b>🎮 Добро пожаловать в Aura Play!</b>\n\n' +
-    'Здесь ты можешь забронировать компьютер или PS5 Pro, ' +
-    'посмотреть цены и выбрать VIP-комнату.\n\n' +
-    `🕒 ${OPEN_TEXT}\n\nВыбери нужный раздел в меню.`,
-    {
-      parse_mode: 'HTML',
-      reply_markup: {
-        keyboard: [
-          [
-            { text: '🎮 Забронировать' },
-            { text: '💰 Посмотреть цены' }
-          ],
-          [
-            { text: '👑 VIP-комнаты' },
-            { text: '📅 Расписание' }
-          ],
-          [
-            { text: '📋 Мои заявки' },
-            { text: 'ℹ️ Информация' }
-          ],
-          [{ text: '🛠 Техподдержка' }],
-          [{ text: '⬅️ Назад' }]
-        ],
-        resize_keyboard: true
-      }
-    }
-  );
-}
-
-function inlineBack(callback = 'back') {
-  return {
-    inline_keyboard: [
-      [{ text: '⬅️ Назад', callback_data: callback }]
-    ]
-  };
-}
-
-function rowsWithBack(rows, callback = 'back') {
-  return {
-    inline_keyboard: [
-      ...rows,
-      [{ text: '⬅️ Назад', callback_data: callback }]
-    ]
-  };
-}
-
-// ================= ИНФОРМАЦИЯ И ЦЕНЫ =================
+// ================= ЦЕНЫ И ИНФОРМАЦИЯ =================
 
 function showPrices(id) {
   state(id).step = 'prices';
@@ -553,7 +424,18 @@ function showInfo(id) {
     `✈️ Telegram: ${SUPPORT_TELEGRAM}`,
     {
       parse_mode: 'HTML',
-      reply_markup: inlineBack()
+      reply_markup: {
+        inline_keyboard: [
+          [{
+            text: '📸 Instagram AURA PLAY',
+            url: 'https://www.instagram.com/aura.play.kapan?rpxt=N3dxM3NodTM2aTc%3D&utm_source=qr'
+          }],
+          [{
+            text: '⬅️ Назад',
+            callback_data: 'back'
+          }]
+        ]
+      }
     }
   );
 }
@@ -997,178 +879,140 @@ bot.on('message', async msg => {
       const end = start + s.duration * HOUR_MS;
 
       if (!validBookingWindow(s.date, start, end)) {
-        await send(
-          id,
-          '❌ Клуб работает с 10:00 до 00:00. Бронирование должно закончиться до полуночи.'
-        );
-
-        return askDuration(id);
+        await send(id, '❌ Выбранное время выходит за пределы рабочего графика.');
+        return askTime(id);
       }
 
-      if (start < Date.now() + MIN_BOOKING_LEAD_MS) {
-        return send(
-          id,
-          '❌ Бронирование нужно оформлять минимум за 2 часа. Выбери другое время.'
-        );
+      const conflict = bookings.some(b =>
+        b.assetId === s.assetId &&
+        ['pending', 'approved'].includes(b.status) &&
+        start < b.end &&
+        end > b.start
+      );
+
+      if (conflict) {
+        await send(id, '❌ Это место уже занято на выбранное время. Выбери другое.');
+        return showScheduleForAsset(id);
       }
 
-      const existing = conflict(s.assetId, start, end);
-
-      if (existing) {
-        return send(
-          id,
-          `❌ Это место уже занято до ${dateTime(existing.end)}. Выбери другое время.`
-        );
-      }
-
-      const asset = findAsset(s.assetId);
+      const price = priceFor(s.assetId, start, end);
 
       const booking = {
-        chatId: id,
-        username: msg.from.username
-          ? `@${msg.from.username}`
-          : (msg.from.first_name || 'Клиент'),
+        chatId: String(id),
         assetId: s.assetId,
-        category: s.category,
         date: s.date,
-        time: s.time,
-        duration: s.duration,
         start,
         end,
+        duration: s.duration,
         phone,
-        price: calculatePrice(s.category, start, s.duration),
+        price,
         status: 'pending'
       };
 
-      const { data, error } = await supabase
-        .from('bookings')
-        .insert({
-          telegram_id: id,
-          asset_name: s.assetId,
-          booking_date: s.date.split('.').reverse().join('-'),
-          start_time: s.time,
-          duration: s.duration,
-          status: 'pending',
-          phone,
-          customer_name: booking.username,
-          comment: JSON.stringify(booking)
-        })
-        .select('id')
-        .single();
-
-      if (error) {
-        console.error('Ошибка Supabase:', error.message);
-
-        return send(
-          id,
-          'Не удалось сохранить заявку. Попробуй позже.'
-        );
-      }
-
-      booking.id = Number(data.id);
-      bookings.push(booking);
-      s.step = 'menu';
+      await saveBooking(booking);
 
       await send(
         id,
-        `<b>✅ Заявка №${booking.id} создана!</b>\n\n` +
-        `Место: ${asset.name}\n` +
-        `Начало: ${dateTime(start)}\n` +
-        `Окончание: ${dateTime(end)}\n` +
-        `Длительность: ${booking.duration} ч.\n` +
-        `Цена: ${booking.price.toLocaleString('ru-RU')} драм\n` +
-        'Статус: ⏳ ожидает подтверждения администратора.',
-        { parse_mode: 'HTML' }
+        '<b>✅ ЗАЯВКА СОЗДАНА!</b>\n\n' +
+        `Номер заявки: №${booking.id}\n` +
+        `Место: ${findAsset(s.assetId).name}\n` +
+        `Дата: ${s.date}\n` +
+        `Время: ${timeText(start)}–${timeText(end)}\n` +
+        `Длительность: ${s.duration} ч.\n` +
+        `Телефон: ${phone}\n` +
+        `Стоимость: ${price.toLocaleString('ru-RU')} драм\n\n` +
+        '⏳ Ожидай подтверждения администратора.',
+        {
+          parse_mode: 'HTML',
+          reply_markup: {
+            remove_keyboard: true
+          }
+        }
       );
 
-      const adminMessage =
-        `<b>🔔 НОВАЯ ЗАЯВКА №${booking.id}</b>\n\n` +
-        `Клиент: ${booking.username}\n` +
-        `Телефон: ${booking.phone}\n` +
-        `Место: ${asset.name}\n` +
-        `Начало: ${dateTime(start)}\n` +
-        `Окончание: ${dateTime(end)}\n` +
-        `Цена: ${booking.price.toLocaleString('ru-RU')} драм`;
-
-      await Promise.all(
-        ADMIN_IDS.map(adminId =>
-          bot.sendMessage(adminId, adminMessage, {
+      for (const adminId of ADMIN_IDS) {
+        await bot.sendMessage(
+          adminId,
+          '<b>🔔 НОВАЯ ЗАЯВКА AURA PLAY</b>\n\n' +
+          `Номер: №${booking.id}\n` +
+          `Клиент: <code>${id}</code>\n` +
+          `Место: ${findAsset(s.assetId).name}\n` +
+          `Дата: ${s.date}\n` +
+          `Время: ${timeText(start)}–${timeText(end)}\n` +
+          `Длительность: ${s.duration} ч.\n` +
+          `Телефон: ${phone}\n` +
+          `Стоимость: ${price.toLocaleString('ru-RU')} драм`,
+          {
             parse_mode: 'HTML',
             reply_markup: {
-              inline_keyboard: [[
-                {
+              inline_keyboard: [
+                [{
                   text: '✅ Подтвердить',
                   callback_data: `approve:${booking.id}`
-                },
-                {
+                }],
+                [{
                   text: '❌ Отклонить',
                   callback_data: `reject:${booking.id}`
-                }
-              ]]
+                }]
+              ]
             }
-          }).catch(e => console.error(
-            `Ошибка отправки администратору ${adminId}:`,
-            e.message
-          ))
-        )
-      );
+          }
+        );
+      }
+
+      s.step = 'menu';
+
+      return;
     }
-  } catch (e) {
-    console.error('Ошибка обработки сообщения:', e);
+  } catch (error) {
+    console.error('Ошибка обработки сообщения:', error);
 
     await send(
       id,
-      'Произошла ошибка. Нажми /start.'
-    ).catch(() => {});
+      '❌ Произошла ошибка. Попробуй ещё раз или обратись в техподдержку.'
+    );
   }
 });
 
-// ================= INLINE-КНОПКИ =================
+// ================= НАЖАТИЯ НА КНОПКИ =================
 
 bot.on('callback_query', async query => {
-  const id = query.message.chat.id;
-  const data = query.data || '';
-  const s = state(id);
+  const id = String(query.message.chat.id);
+  const data = query.data;
 
   try {
     await bot.answerCallbackQuery(query.id);
 
-    if (data === 'lang:hy' || data === 'lang:ru') {
-      s.lang = data === 'lang:hy' ? 'hy' : 'ru';
+    if (data.startsWith('lang:')) {
+      const language = data.split(':')[1];
+
+      state(id).language = language;
+      state(id).step = 'menu';
+
+      await bot.deleteMessage(id, query.message.message_id).catch(() => {});
+
       return mainMenu(id);
     }
 
-    if (data === 'back') return goBack(id);
-    if (data === 'back_category') {
-      return goBack(id, 'back_category');
-    }
-    if (data === 'back_day') return goBack(id, 'back_day');
-    if (data === 'back_time') return goBack(id, 'back_time');
-
     if (data.startsWith('cat:')) {
-      return showAssets(id, data.slice(4));
+      const category = data.split(':')[1];
+
+      return showAssets(id, category);
     }
 
     if (data.startsWith('asset:')) {
-      const assetId = data.slice(6);
-
-      if (!assets[s.category]?.some(a => a.id === assetId)) {
-        return;
-      }
+      const assetId = data.split(':')[1];
+      const s = state(id);
 
       s.assetId = assetId;
+      s.step = 'day';
 
       return askDay(id);
     }
 
     if (data.startsWith('day:')) {
-      if (s.step !== 'day') return;
-
-      const day = Number(data.slice(4));
-
-      if (!Number.isInteger(day) || day < 1 || day > 31) {
-        return;
-      }
+      const day = Number(data.split(':')[1]);
+      const s = state(id);
 
       s.day = day;
 
@@ -1176,199 +1020,134 @@ bot.on('callback_query', async query => {
     }
 
     if (data.startsWith('month:')) {
-      if (s.step !== 'month' || !s.day) return;
-
-      const month = Number(data.slice(6));
-
-      if (!Number.isInteger(month) || month < 1 || month > 12) {
-        return;
-      }
-
-      const date = nextDate(s.day, month);
-
-      if (!date || !validDate(date)) {
-        await send(
-          id,
-          '❌ Такой даты нет. Выбери другой день.'
-        );
-
-        return askDay(id);
-      }
+      const month = Number(data.split(':')[1]);
+      const s = state(id);
 
       s.month = month;
-      s.date = date;
+
+      const now = nowLocal();
+      const year = now.getUTCFullYear();
+
+      const date = new Date(Date.UTC(year, month - 1, s.day));
+      const selectedDate = dateText(date);
+
+      if (
+        date.getUTCMonth() !== month - 1 ||
+        date.getUTCDate() !== s.day
+      ) {
+        return send(id, '❌ Такой даты не существует. Выбери другую.');
+      }
+
+      if (timestamp(selectedDate, '23:59') < Date.now()) {
+        return send(id, '❌ Эта дата уже прошла. Выбери другую.');
+      }
+
+      s.date = selectedDate;
 
       return showScheduleForAsset(id);
     }
 
-    // ----- ПРОВЕРКА ДЛИТЕЛЬНОСТИ -----
-
     if (data.startsWith('duration:')) {
-      if (s.step !== 'duration') return;
+      const duration = Number(data.split(':')[1]);
 
-      const duration = Number(data.slice(9));
-
-      if (
-        !Number.isInteger(duration) ||
-        duration < 1 ||
-        duration > 12
-      ) {
-        return;
+      if (!Number.isInteger(duration) || duration < 1 || duration > 12) {
+        return send(id, '❌ Неверная длительность.');
       }
 
-      const start = timestamp(s.date, s.time);
-      const end = start + duration * HOUR_MS;
-
-      if (!validBookingWindow(s.date, start, end)) {
-        await send(
-          id,
-          '❌ Эта длительность выходит за часы работы. ' +
-          'Клуб закрывается в 00:00. Выбери меньше часов.'
-        );
-
-        return askDuration(id);
-      }
-
-      if (start < Date.now() + MIN_BOOKING_LEAD_MS) {
-        await send(
-          id,
-          '❌ Бронирование нужно оформлять минимум за 2 часа. Выбери другое время.'
-        );
-
-        return askTime(id);
-      }
-
-      const existing = conflict(s.assetId, start, end);
-
-      if (existing) {
-        await send(
-          id,
-          '❌ Это время пересекается с другой заявкой. Выбери другое.'
-        );
-
-        return showScheduleForAsset(id);
-      }
-
-      s.duration = duration;
+      state(id).duration = duration;
 
       return askPhone(id);
     }
 
-    // ----- ПОДТВЕРЖДЕНИЕ И ОТКЛОНЕНИЕ ЗАЯВОК -----
-
-    if (
-      data.startsWith('approve:') ||
-      data.startsWith('reject:')
-    ) {
-      if (!ADMIN_IDS.includes(String(query.from.id))) {
+    if (data.startsWith('approve:')) {
+      if (!ADMIN_IDS.includes(id)) {
         return bot.answerCallbackQuery(query.id, {
-          text: 'Только администратор может это сделать.'
+          text: 'Только администратор может подтвердить заявку.',
+          show_alert: true
         });
       }
 
-      const [action, idText] = data.split(':');
+      const bookingId = data.split(':')[1];
+
+      await updateBookingStatus(bookingId, 'approved');
 
       const booking = bookings.find(
-        b => b.id === Number(idText)
+        b => String(b.id) === String(bookingId)
       );
 
-      if (!booking || booking.status !== 'pending') {
-        return send(
-          id,
-          'Заявка уже обработана или не найдена.'
+      if (booking) {
+        await bot.sendMessage(
+          booking.chatId,
+          `✅ Твоя заявка №${booking.id} подтверждена!\n\n` +
+          `Место: ${findAsset(booking.assetId).name}\n` +
+          `Дата: ${booking.date}\n` +
+          `Время: ${timeText(booking.start)}–${timeText(booking.end)}\n` +
+          `Стоимость: ${booking.price.toLocaleString('ru-RU')} драм`
         );
       }
-
-      if (action === 'approve') {
-        // Дополнительная защита перед подтверждением.
-        if (
-          !validBookingWindow(
-            booking.date,
-            booking.start,
-            booking.end
-          )
-        ) {
-          booking.status = 'rejected';
-
-          await saveStatus(booking.id, 'rejected');
-
-          await bot.sendMessage(
-            booking.chatId,
-            '❌ Заявка отклонена: время бронирования выходит за часы работы клуба.'
-          );
-
-          return bot.editMessageReplyMarkup(
-            { inline_keyboard: [] },
-            {
-              chat_id: id,
-              message_id: query.message.message_id
-            }
-          );
-        }
-
-        const existing = conflict(
-          booking.assetId,
-          booking.start,
-          booking.end,
-          booking.id
-        );
-
-        if (existing) {
-          booking.status = 'rejected';
-
-          await saveStatus(booking.id, 'rejected');
-
-          await bot.sendMessage(
-            booking.chatId,
-            '❌ Заявка не подтверждена: время уже занято. Свяжись с клубом.'
-          );
-
-          return bot.editMessageReplyMarkup(
-            { inline_keyboard: [] },
-            {
-              chat_id: id,
-              message_id: query.message.message_id
-            }
-          );
-        }
-      }
-
-      booking.status =
-        action === 'approve' ? 'approved' : 'rejected';
-
-      await saveStatus(booking.id, booking.status);
-
-      await bot.sendMessage(
-        booking.chatId,
-        action === 'approve'
-          ? `✅ Бронирование №${booking.id} подтверждено! Ждём тебя в Aura Play.`
-          : `❌ Бронирование №${booking.id} отклонено. Свяжись с техподдержкой.`
-      );
 
       return bot.editMessageReplyMarkup(
-        { inline_keyboard: [] },
+        {
+          inline_keyboard: [[{
+            text: '✅ Заявка подтверждена',
+            callback_data: 'done'
+          }]]
+        },
         {
           chat_id: id,
           message_id: query.message.message_id
         }
       );
     }
-  } catch (e) {
-    console.error('Ошибка обработки кнопки:', e);
 
-    if (
-      data.startsWith('approve:') ||
-      data.startsWith('reject:')
-    ) {
-      await Promise.all(
-        ADMIN_IDS.map(adminId =>
-          bot.sendMessage(
-            adminId,
-            'Не удалось обработать заявку. Проверь подключение к Supabase.'
-          ).catch(() => {})
-        )
+    if (data.startsWith('reject:')) {
+      if (!ADMIN_IDS.includes(id)) {
+        return bot.answerCallbackQuery(query.id, {
+          text: 'Только администратор может отклонить заявку.',
+          show_alert: true
+        });
+      }
+
+      const bookingId = data.split(':')[1];
+
+      await updateBookingStatus(bookingId, 'rejected');
+
+      const booking = bookings.find(
+        b => String(b.id) === String(bookingId)
+      );
+
+      if (booking) {
+        await bot.sendMessage(
+          booking.chatId,
+          `❌ Твоя заявка №${booking.id} отклонена администратором.`
+        );
+      }
+
+      return bot.editMessageReplyMarkup(
+        {
+          inline_keyboard: [[{
+            text: '❌ Заявка отклонена',
+            callback_data: 'done'
+          }]]
+        },
+        {
+          chat_id: id,
+          message_id: query.message.message_id
+        }
       );
     }
+
+    if (data === 'back' || data.startsWith('back_')) {
+      return goBack(id, data);
+    }
+
+  } catch (error) {
+    console.error('Ошибка кнопки:', error);
+
+    await bot.answerCallbackQuery(query.id, {
+      text: 'Произошла ошибка. Попробуй ещё раз.',
+      show_alert: true
+    }).catch(() => {});
   }
 });
 
