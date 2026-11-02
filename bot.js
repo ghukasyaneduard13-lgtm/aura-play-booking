@@ -333,11 +333,11 @@ function priceRate(category, hour) {
   const daytime = hour >= OPEN_HOUR && hour < DAY_RATE_END;
 
   if (category === 'computer' || category === 'ps_normal') {
-    return daytime ? 1000 : 1200;
+    return daytime ? 700 : 900;
   }
 
   if (category === 'ps_vip') {
-    return daytime ? 1200 : 1400;
+    return daytime ? 900 : 1100;
   }
 
   return 0;
@@ -494,14 +494,14 @@ function showPrices(id) {
     id,
     '<b>💰 ЦЕНЫ AURA PLAY</b>\n\n' +
     '<b>💻 Компьютеры</b>\n' +
-    '10:00–20:00 — 1 000 драм/час\n' +
-    '20:00–00:00 — 1 200 драм/час\n\n' +
+    '10:00–20:00 — 700 драм/час\n' +
+    '20:00–00:00 — 900 драм/час\n\n' +
     '<b>🎮 PS5 Pro — обычная зона</b>\n' +
-    '10:00–20:00 — 1 000 драм/час\n' +
-    '20:00–00:00 — 1 200 драм/час\n\n' +
+    '10:00–20:00 — 700 драм/час\n' +
+    '20:00–00:00 — 900 драм/час\n\n' +
     '<b>👑 PS5 Pro — VIP-комната</b>\n' +
-    '10:00–20:00 — 1 200 драм/час\n' +
-    '20:00–00:00 — 1 400 драм/час\n\n' +
+    '10:00–20:00 — 900 драм/час\n' +
+    '20:00–00:00 — 1 100 драм/час\n\n' +
     `🕒 ${OPEN_TEXT}`,
     {
       parse_mode: 'HTML',
@@ -518,8 +518,8 @@ function showVip(id) {
     '<b>👑 VIP-КОМНАТЫ AURA PLAY</b>\n\n' +
     '• VIP-комната № 1 — PS5 Pro\n' +
     '• VIP-комната № 2 — PS5 Pro\n\n' +
-    '10:00–20:00 — 1 200 драм/час\n' +
-    '20:00–00:00 — 1 400 драм/час\n\n' +
+    '10:00–20:00 — 900 драм/час\n' +
+    '20:00–00:00 — 1 100 драм/час\n\n' +
     `🕒 ${OPEN_TEXT}`,
     {
       parse_mode: 'HTML',
